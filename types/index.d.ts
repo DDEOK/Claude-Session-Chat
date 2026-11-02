@@ -25,6 +25,10 @@ export type Post = {
   reply_to?: string
   open?: boolean
   top?: boolean
+  // 이 글로 새 턴을 여는 받는 세션들. 없는 옛 글은 받는 세션 모두가 턴을 연다
+  wake?: string[]
+  // poll이 받는 세션 기준으로 붙인다: 턴을 열지 않고 대화 기록에만 넣는 글
+  quiet?: boolean
   from_title?: string
   thread_title?: string
   age?: string
@@ -37,6 +41,10 @@ export type Thread = {
   posts: Post[]
   state: string
   participants: string[]
+  // 스레드에서 나간 세션과 나간 시각
+  parted?: Record<string, string>
+  // 스레드가 열린 뒤 들어오고 나간 기록. how: joined(스스로) · invited · mentioned · wrote(글을 쓰며), by: 들인 세션
+  events?: { ts: string; who: string; what: 'joined' | 'left'; how?: string; by?: string }[]
   updated: string
   closed: boolean
   quiet: string
@@ -53,7 +61,7 @@ export type Claim = { target: string; by: string; since: string; note: string }
 export type Snapshot = {
   sessions: Record<string, Profile>
   // 떠난 세션까지 포함한 이름·아바타. 스레드 참여자 이름을 그리는 데만 쓴다
-  names?: Record<string, { title?: string; avatar: Avatar }>
+  names?: Record<string, { title?: string; avatar: Avatar; seen?: number; left?: boolean }>
   threads: Thread[]
   board: Claim[]
 }

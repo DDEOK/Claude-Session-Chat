@@ -39,6 +39,9 @@ h1 { font-size: 20px; margin: 0; }
 .people { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 4px; margin-top: 6px; }
 .people.named { column-gap: 14px; }
 .chip { display: inline-flex; align-items: center; gap: 6px; }
+.event .avatar.xs, .event .dot.xs { width: 18px; height: 18px; border-radius: 5px; margin-right: 6px; vertical-align: middle; }
+.event { display: flex; align-items: center; margin: 14px auto 0; width: fit-content; max-width: 100%; padding: 5px 14px; border-radius: 999px; background: rgba(128, 128, 128, .16); color: var(--muted); font-size: 12px; text-align: center; }
+.event .time { margin-left: 8px; opacity: .75; }
 hr.head-line { border-top-color: var(--muted); opacity: .5; margin: 10px 0 2px; }
 .state { font-weight: 600; }
 .post { display: flex; gap: 10px; margin-top: 12px; }
@@ -80,24 +83,26 @@ const T = {
   en: { title: 'Session chat', sessions: n => `${n} sessions`, open: n => `${n} open threads`, threads: 'Threads', others: 'Other sessions',
     waiting: 'Waiting', working: 'Working', answered: 'Answered', declined: 'Declined', info: 'Notice', ended: 'Ended',
     reply: 'Reply', ask: 'Question', request: 'Request', comment: 'Comment', done: 'done', partial: 'in progress', declinedR: 'declined',
-    everyone: 'Everyone in the thread', me: 'Me', endedS: 'ended', pending: 'Getting ready', firstTask: 'Waiting for its first task',
+    everyone: 'Everyone in the thread', me: 'Me', pending: 'Getting ready', firstTask: 'Waiting for its first task',
     noReply: q => `no reply for ${q}`, quiet: q => `quiet for ${q}`, posts: n => `posts ${n}`, writing: w => `${w} is writing a reply`,
     waitFor: w => `${w} waiting for reply`, nobody: 'Nobody answered the question without a mention. Ask again with an @mention',
     openQ: 'Question without a mention: waiting for a session that can answer', none: 'No threads yet', noneOpen: 'No open threads',
     noOthers: 'No other sessions are open', showEnded: n => `Show ${n} ended threads`, hideEnded: 'Hide ended threads',
     expand: 'Expand', collapse: 'Collapse', showNames: '≡ Names', hideNames: '≡ Hide names',
+    evLeft: n => `${n} left`, evJoined: n => `${n} joined`,
     showEarlier: n => `Show ${n} earlier posts`, hideEarlier: 'Hide earlier posts',
     noFolder: 'Sessions without a folder', unknown: 'Unknown location',
     note: 'Read-only view. Comments are written in the /chat-room panel. Refreshes every few seconds.', fail: 'The page server has stopped. Press "Open in browser" in the panel again.' },
   ko: { title: '세션 대화방', sessions: n => `세션 ${n}`, open: n => `열린 스레드 ${n}`, threads: '스레드', others: '다른 세션',
     waiting: '답 기다림', working: '작업 중', answered: '답변 완료', declined: '거절됨', info: '알림', ended: '끝남',
     reply: '답변', ask: '질문', request: '작업 요청', comment: '의견', done: '완료', partial: '작업 중', declinedR: '거절',
-    everyone: '스레드 모두에게', me: '나', endedS: '종료됨', pending: '준비 중', firstTask: '첫 작업을 기다리는 중',
+    everyone: '스레드 모두에게', me: '나', pending: '준비 중', firstTask: '첫 작업을 기다리는 중',
     noReply: q => `${q}째 답 없음`, quiet: q => `${q}째 새 글 없음`, posts: n => `글 ${n}`, writing: w => `${w}이(가) 답을 쓰는 중`,
     waitFor: w => `${w} 답 기다림`, nobody: '멘션 없는 질문에 아무도 답하지 않았습니다. 세션을 멘션해 다시 물어보세요',
     openQ: '멘션 없는 질문: 답할 수 있는 세션을 기다리는 중', none: '아직 스레드가 없습니다', noneOpen: '열린 스레드가 없습니다',
     noOthers: '지금 열려 있는 다른 세션이 없습니다', showEnded: n => `끝난 스레드 ${n}개 보기`, hideEnded: '끝난 스레드 숨기기',
     expand: '펼치기', collapse: '접기', showNames: '≡ 이름', hideNames: '≡ 이름 숨기기',
+    evLeft: n => `${n}님이 나갔습니다`, evJoined: n => `${n}님이 들어왔습니다`,
     showEarlier: n => `이전 글 ${n}개 보기`, hideEarlier: '이전 글 접기',
     noFolder: '폴더 없이 연 세션', unknown: '위치 모름',
     note: '보기 전용 페이지입니다. 의견은 /chat-room 패널에서 씁니다. 몇 초마다 새로 고칩니다.', fail: '페이지 서버가 꺼졌습니다. 패널의 「브라우저로 보기」를 다시 누르세요.' },
@@ -112,7 +117,8 @@ function who(pid) {
   if (pid === 'user') return { label: t.me, shape: 'user', hex: '#3D3A36' }
   const [base, sub] = pid.split('.')
   const p = snap.sessions[base] || (snap.names || {})[base]
-  const name = p?.title ? (snap.sessions[base] ? p.title : `${p.title} (${t.endedS})`) : t.pending
+  // 꺼진 세션은 아이콘을 반투명으로만 보인다. 이름 뒤 "(종료됨)"은 스레드의 "끝남"과 헷갈려 뺐다. 패널과 같다
+  const name = p?.title || t.pending
   return { label: sub ? `${name} · ${sub}` : name, shape: p?.avatar?.shape || 'terminal', hex: p?.avatar?.hex || '#5F6B7A' }
 }
 // 아바타 그림의 색 자리(#COLOR)를 채워 data URL로 쓴다. 그림을 못 받으면 색 칸으로 대신한다
@@ -133,7 +139,8 @@ function message(p, depth) {
   const w = who(p.from)
   const tag = p.kind === 'reply' ? `${t.reply} · ${({ answered: t.done, partial: t.partial, declined: t.declinedR })[p.status] || p.status}` : (t[p.kind] || p.kind)
   const to = p.open ? t.everyone : p.to.map(x => '@' + who(x).label).join(' ')
-  return `<div class="post">${avatar(w, depth ? 'sm' : '')}<div class="body"><div class="meta"><b style="color:var(--text)">${esc(w.label)}</b> ${esc(p.ts.slice(11, 16))} · ${esc(tag)} · <span class="to">${esc(to)}</span></div>${esc(p.text)}</div></div>`
+  const gone = p.from !== 'user' && !snap.sessions[p.from.split('.')[0]]
+  return `<div class="post">${avatar(w, [depth ? 'sm' : '', gone ? 'idle' : ''].join(' ').trim())}<div class="body"><div class="meta"><b style="color:var(--text)">${esc(w.label)}</b> ${esc(p.ts.slice(11, 16))} · ${esc(tag)} · <span class="to">${esc(to)}</span></div>${withMentions(p.text)}</div></div>`
 }
 // 패널처럼 첫 글과 최근 10개만 그리고 그 사이는 "이전 글 N개 보기"로 접는다
 const RECENT_POSTS = 10
@@ -154,14 +161,33 @@ function conversation(th) {
   const earlier = th.posts.length > RECENT_POSTS
     ? `<div><button class="more" data-earlier="${esc(th.id)}">${esc(ui.earlier.has(th.id) ? t.hideEarlier : t.showEarlier(hidden))}</button></div>`
     : ''
+  // 들어오고 나간 기록은 대화 사이의 작은 줄로, 그 시각 뒤 처음 오는 바깥 단계 글 앞에 선다(뒤에 글이 없으면 맨 끝). 패널과 같다
+  const since = hidden && posts[0] ? posts[0].ts : ''
+  const pending = (th.events || []).filter(ev => ev.ts >= since)
+  const flush = until => {
+    while (pending.length && (until === undefined || pending[0].ts <= until)) out += eventPill(pending.shift())
+  }
   const walk = (p, depth) => {
+    if (depth === 0) flush(p.ts)
     if (depth === 0 && n++ > 0) out += '<hr>'
     out += depth === 0 ? message(p, 0) : `<div class="reply" style="margin-left:${Math.min(depth, 4) * 20}px">${message(p, depth)}</div>`
     if (p === th.root) out += earlier
     for (const c of children.get(p.id) || []) walk(c, depth + 1)
   }
   for (const p of tops) walk(p, 0)
+  flush()
   return out
+}
+// 본문의 멘션(@세션 이름, @모두)을 머리줄 멘션과 같은 파란색으로 칠한다. 아는 이름에 맞는 것만, 긴 이름부터 맞춘다. 패널과 같다
+function withMentions(text) {
+  const titles = [...new Set([...Object.values(snap.sessions), ...Object.values(snap.names || {})].map(p => p?.title || '').filter(Boolean))]
+  const re = new RegExp(`(@(?:${[...titles, '모두', 'all'].sort((a, b) => b.length - a.length).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}))`, 'g')
+  return String(text ?? '').split(re).map((s, i) => i % 2 ? `<span class="to">${esc(s)}</span>` : esc(s)).join('')
+}
+// 카카오톡 안내 알약처럼 "누가 · 들어옴/나감 · 시각"만 쓴다. 초대·멘션 경위는 쓰지 않는다. 패널과 같다
+function eventPill(ev) {
+  const w = who(ev.who)
+  return `<div class="event">${avatar(w, ['xs', ev.what === 'left' ? 'idle' : ''].join(' ').trim())}${esc(ev.what === 'left' ? t.evLeft(w.label) : t.evJoined(w.label))}<span class="time">${esc(ev.ts.slice(11, 16))}</span></div>`
 }
 // 패널과 같은 구성: 제목 줄(상태 · 제목 … 글 수 · 펼치기) → 참여 세션 아이콘 줄(≡ 이름으로 이름 보기) → 가로선 → 상태 글 → 대화.
 // 보기 전용이라 세션 끼우기(+ 세션)는 없다. 가로선은 펼쳤거나 상태 글이 있을 때만 긋는다

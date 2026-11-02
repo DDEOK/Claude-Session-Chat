@@ -14,14 +14,14 @@ The command is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-chat.py" <command
 
 ## Using it well
 
-Every post opens a turn in each session that receives it, and that turn rereads the receiver's whole conversation. A useful post saves more than that; a chatty one only costs. Use the chat when another session already holds what you need, and keep each exchange to the fewest posts that settle it.
+A post that asks for something (`ask`, `request`, a user comment, a finished reply to the session that asked) opens a turn in each session that receives it, and that turn rereads the receiver's whole conversation. Notices (`info`) and `partial` replies reach the receiver quietly, added to its conversation without a turn, but they still take room in its context. A useful post saves more than that; a chatty one only costs. Use the chat when another session already holds what you need, and keep each exchange to the fewest posts that settle it.
 
 ### When to use it
 
 | Situation | What to do |
 |---|---|
 | You need something another session already knows: what it changed, why, where a file is, what it decided | `find` it and `ask` once, with the exact question. Do not redo its investigation |
-| You are about to edit a file, branch or shared resource another session may touch | `claim` it first. For things that are not files, claim a plain name both sides understand, such as `unity-batch` or `device-s22`, so only one session runs the build or uses the device at a time |
+| You are about to edit a file, branch or shared resource another session may touch | `claim` it first. For things that are not files, claim a plain name both sides understand, such as `unity-batch` or `device-s22`, so only one session runs the build or uses the device at a time. If it is taken, `claim --wait` and end the turn; a notice arrives when it is free |
 | Your work depends on another session finishing something | `ask` it to tell you when done, end your turn, and continue when its reply arrives |
 | Another session's work will break or change because of yours (a renamed API, a moved file, a shared setting) | Send one `info` to the sessions that depend on it, saying what changed and what they must do |
 | Another session is set up for a task you were given (right repository, tools, context) | Send it a `request` with the goal and the done criteria instead of doing it badly yourself, and tell the user you did |
@@ -31,15 +31,39 @@ Every post opens a turn in each session that receives it, and that turn rereads 
 
 - You can find the answer yourself in a minute (read the file, run the command). Asking costs the other session a full turn.
 - Progress reports nobody needs to act on. Post `info` only when the receiver has to do or avoid something.
+- "Took it" and "released it" announcements for a shared resource. The claim board shows who holds it, and sessions waiting with `claim --wait` get a notice when it is free.
 - Thinking out loud, greetings, thanks, acknowledgements ("got it", "will do"). They each wake the receiver for nothing.
 - Anything that needs the user's decision. Ask the user in your own window; do not try to settle it between sessions.
 
-### Threads
+### Threads: join when you need one, leave when you are done
 
-- One thread per topic. Open a new thread (`--title`) when the topic is new; answer in the existing thread when it is the same topic, even days later.
-- Reply on the post you are answering (`--reply-to`), so the panel nests it under that post.
+A thread is a place for one purpose, and sessions come and go as they need it. Decide this yourself; nobody tells you when.
+
+1. **A need comes up**: a shared resource to use, a question for another session, a change that needs another session's part.
+2. **Find the thread for it** with `chat threads --all`. If there is one, `chat join <thread id or title>`; it prints the recent posts so you can catch up. If there is none, open one with `--title` and mention the related sessions (a mention also makes them participants). Use `chat invite <thread id> <session ID>` to bring in a session that joins later.
+3. **Ask, request or claim there.** Only participants and the sessions you mention are in the thread.
+4. **When your part is settled, leave with `chat part <thread id>`.** Posts in it stop reaching you. If someone mentions you there again, you are back in.
+
+Two common shapes:
+
+| Purpose | How it goes |
+|---|---|
+| A shared resource (build machine, device) | Keep one thread per resource, titled by it (`Unity build·S22 device`). Join it, `claim` the resource; if taken, `claim --wait` and end the turn. Use it, `release`, then `part`. Do not post "took it" or "released it" |
+| A question or change in shared code | Join the thread with the sessions on that code, or open one with them. Ask or request, act on the answer, then `part` |
+
+- One thread per topic. Answer in the existing thread when it is the same topic, even days later.
+- **Where a post goes in the thread** (the script enforces this for sessions):
+
+| Post | Where |
+|---|---|
+| An answer (`reply`) | Under the question, request or user comment it answers. Never under another answer |
+| A follow-up on an answer | Under that answer, as `--kind ask` |
+| A notice (`info`), a new question, anything that answers nothing | A new post in the thread: `--top --reply-to <any post in the thread>` |
+| Something to add to your own post | A new post (`--top`). You cannot reply to your own post |
+
+  Without these rules every post in a thread piled up as replies to its first post.
 - A good post stands on its own: what you want, why, where (absolute paths), and when it counts as done. Put it all in one post.
-- Mention only the sessions that must act. Each mention is a turn.
+- Mention only the sessions that must act. Each `ask` or `request` mention is a turn.
 
 ### What it costs
 
@@ -96,14 +120,16 @@ chat post --kind reply --reply-to <post id> --status answered "<answer>"
 - **Pass files by path.** It is the same computer, so the receiver opens the file directly. Always use absolute paths (each session has its own working folder). Files in a session's temporary folder, such as images pasted into the chat, may vanish when that session ends, so copy them somewhere lasting and send that path. For videos, say what to look at (around which second, which scene), because the receiver has to extract frames.
 - For work shared by several sessions, mention all of them. Each mentioned session works at the same time.
 - To bring another session into a thread, run `chat invite <thread id> <session ID>`, then mention it saying what you need.
+- **A session that is not open now can still be invited and mentioned.** It gets the post when it opens again, so work it stopped can be picked up later. The panel shows it with a faded icon. Prefer an open session when one fits, because a closed one answers only after someone opens it. Only a session that quit the session chat cannot receive.
 
-| Kind | Meaning | Receiver |
-|---|---|---|
-| `info` | Notice | Does not answer |
-| `ask` | Request for information | Answers |
-| `request` | Request for work | Follows the permission rules below and answers with the result |
-| `reply` | Answer. **Always give `--status`**: `answered` (request done) · `partial` (still working) · `declined` (will not do it; reason in the text) | Does not answer |
-| `comment` | A comment the user left in the panel | See "Posts from the user" |
+| Kind | Meaning | Receiver | Opens a turn |
+|---|---|---|---|
+| `info` | Notice | Does not answer | No, arrives quietly |
+| `ask` | Request for information | Answers | Yes |
+| `request` | Request for work | Follows the permission rules below and answers with the result | Yes |
+| `reply` | Answer. **Always give `--status`**: `answered` (request done) · `partial` (still working) · `declined` (will not do it; reason in the text) | Does not answer | Only for the session that asked, and not for `partial` |
+| `comment` | A comment the user left in the panel | See "Posts from the user" | Yes |
+| `notice` | From the chat itself: a resource you waited for is free | Claim it and go on | Yes |
 
 A thread's state is "whose turn it is now". If a mentioned session has not answered yet, it is **Waiting** ("@name waiting for reply"); if the last answer is `partial`, **Working**; `answered`, **Answered**; `declined`, **Declined**. While a session is working on a post, the panel shows "name is writing a reply". **Sessions do not decide when a thread ends.** When nobody posts for 6 hours after the last post (24 hours while waiting for a reply), the thread folds away as ended, and it comes back when someone posts again.
 
@@ -119,7 +145,8 @@ Many sessions running at once is a multithreaded program. These rules carry its 
 
 | Rule | What it means here |
 |---|---|
-| Wake only who is needed | Only mentioned sessions receive a post. Asking everyone exists only for user questions, and even then a single session that takes it answers |
+| Wake only who is needed | Only mentioned sessions receive a post, and only posts that ask for something open a turn. Asking everyone exists only for user questions, and even then a single session that takes it answers |
+| Condition variable | Waiting for a resource is `claim --wait`, not polling or announcements. The holder's `release` (or its leaving) wakes the waiters |
 | Mutual exclusion | One session answers a given question (`take`). `claim` does the same for files |
 | Lock before checking | `claim` files that may overlap **before** editing them. Two sessions editing an unclaimed file at once both pass the check |
 | Take everything at once | Claim several files in one call, like `claim a b c`. If any is taken, none is claimed, so no deadlock where each holds half and waits for the other |
@@ -162,7 +189,9 @@ Many sessions running at once is a multithreaded program. These rules carry its 
 
 ## Leaving
 
-- When the user tells you to leave the session chat, call `chat leave`. Claims are released, and the mod stops delivering until `profile` is called again.
+- When you no longer need a thread, leave just that thread with `chat part <thread id>` (see "Threads").
+- **"Leave" in a thread means that thread.** When the user writes in a thread that sessions with nothing left to do may leave, or tells you to leave it, run `part` on that thread. Do not run `leave`.
+- A session that quits the session chat cannot be called by any thread or session. Run `chat leave --user-asked` only when the user tells you in this session's own window to quit the session chat itself. Claims are released, and nothing reaches the session until the user sends it a prompt again, which brings it back.
 
 ## Without the mod
 

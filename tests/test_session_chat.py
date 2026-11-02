@@ -86,15 +86,23 @@ class SessionChatTest(unittest.TestCase):
         self.join("bbbb0002", "받는 세션")
         self.run_chat("bbbb0002", "poll")
         root = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "질문", "하나").stdout)
-        self.run_chat("bbbb0002", "leave")
+        # 대화방 나가기는 사용자가 그 창에서 시켰을 때만 된다. 스레드 나가기(part)와 헷갈린 세션이 끊긴 적이 있다(2026-11-03)
+        r = self.run_chat("bbbb0002", "leave", ok=False)
+        self.assertIn("part", r.stderr)
+        self.run_chat("bbbb0002", "leave", "--user-asked")
         self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
-        self.assertNotEqual(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--reply-to", root["id"], "--kind", "info", "둘", ok=False).returncode, 0)
+        self.assertNotEqual(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--reply-to", root["id"], "--top", "--kind", "ask", "둘", ok=False).returncode, 0)
+        # 사용자가 그 세션에 요청을 보내면 다시 참여한다
+        self.assertIn("Back", self.run_chat("bbbb0002", "activity", "--user").stdout)
+        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--reply-to", root["id"], "--top", "--kind", "ask", "셋")
+        # 나가기 전에 와 있던 글(하나)도 돌아오면 받는다
+        self.assertEqual([m["text"] for m in json.loads(self.run_chat("bbbb0002", "poll").stdout)], ["하나", "셋"])
 
     def test_user_comment_skips_participants_who_left(self):
         self.join("aaaa0001", "보내는 세션")
         self.join("bbbb0002", "받는 세션")
         root = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "질문", "하나").stdout)
-        self.run_chat("bbbb0002", "leave")
+        self.run_chat("bbbb0002", "leave", "--user-asked")
         r = self.run_chat("user", "post", "--to", "aaaa0001,bbbb0002", "--kind", "comment", "--reply-to", root["id"], "의견")
         self.assertIn("thread", json.loads(r.stdout))
 
@@ -123,12 +131,12 @@ class SessionChatTest(unittest.TestCase):
         self.join("aaaa0001", "보내는 세션")
         self.join("bbbb0002", "받는 세션")
         root = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "질문", "하나").stdout)
-        self.run_chat("bbbb0002", "post", "--to", "aaaa0001", "--kind", "reply", "--reply-to", root["id"], "--status", "answered", "답")
+        ans = json.loads(self.run_chat("bbbb0002", "post", "--to", "aaaa0001", "--kind", "reply", "--reply-to", root["id"], "--status", "answered", "답").stdout)
         dump = lambda *extra: json.loads(self.run_chat("aaaa0001", "dump", *extra).stdout)["threads"][0]
         self.assertFalse(dump()["closed"])
         self.assertTrue(dump("--quiet-hours", "0")["closed"])
-        # 답을 기다리는 스레드는 조용한 시간 기준이 아니라 더 긴 기준을 쓴다
-        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--kind", "ask", "--reply-to", root["id"], "하나 더")
+        # 답을 기다리는 스레드는 조용한 시간 기준이 아니라 더 긴 기준을 쓴다. 이어 묻는 것은 답에 질문으로 단다
+        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--kind", "ask", "--reply-to", ans["id"], "하나 더")
         self.assertFalse(dump("--quiet-hours", "0")["closed"])
         self.assertTrue(dump("--quiet-hours", "0", "--waiting-hours", "0")["closed"])
 
@@ -341,6 +349,104 @@ class SessionChatTest(unittest.TestCase):
         # --all은 옵션이다. 위치 인자로 받던 때는 argparse가 실패했다
         self.run_chat("aaaa0001", "release", "--all")
         self.assertEqual(json.loads(self.run_chat("aaaa0001", "dump").stdout)["board"], [])
+
+    def test_only_posts_that_ask_wake_the_receiver(self):
+        # 진행 글(info)과 작업 중 답, 묻지 않은 세션에 간 답은 턴을 열지 않는다(2026-11-03 사용자 지적)
+        for sid, title in (("aaaa0001", "묻는 세션"), ("bbbb0002", "답하는 세션"), ("cccc0003", "같이 보는 세션")):
+            self.join(sid, title)
+            self.run_chat(sid, "poll")
+        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002,cccc0003", "--title", "빌드", "빌드 언제 끝나?").stdout)
+        got = json.loads(self.run_chat("bbbb0002", "poll").stdout)
+        self.assertEqual([m["quiet"] for m in got], [False])
+        self.run_chat("bbbb0002", "post", "--kind", "info", "--top", "--reply-to", ask["id"], "--to", "aaaa0001,cccc0003", "unity-batch 잡음.")
+        self.run_chat("bbbb0002", "post", "--reply-to", ask["id"], "--status", "partial", "--to", "aaaa0001,cccc0003", "절반 끝남.")
+        self.run_chat("bbbb0002", "post", "--reply-to", ask["id"], "--status", "answered", "--to", "aaaa0001,cccc0003", "끝남.")
+        a = json.loads(self.run_chat("aaaa0001", "poll").stdout)
+        c = json.loads(self.run_chat("cccc0003", "poll").stdout)
+        self.assertEqual([(m["text"], m["quiet"]) for m in a], [("unity-batch 잡음.", True), ("절반 끝남.", True), ("끝남.", False)])
+        # 같이 멘션된 세션은 처음 질문으로는 깨고, 묻지 않은 답은 조용히 받는다
+        self.assertEqual([m["quiet"] for m in c], [False, True, True, True])
+
+    def test_join_and_part_a_thread(self):
+        for sid, title in (("aaaa0001", "묻는 세션"), ("bbbb0002", "답하는 세션"), ("cccc0003", "나중에 오는 세션")):
+            self.join(sid, title)
+            self.run_chat(sid, "poll")
+        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "Unity 빌드", "빌드 써도 돼?").stdout)
+        out = self.run_chat("cccc0003", "join", "unity 빌드").stdout
+        self.assertIn("빌드 써도 돼?", out)
+        self.assertIn("cccc0003", json.loads(self.run_chat("aaaa0001", "dump").stdout)["threads"][0]["participants"])
+        self.run_chat("aaaa0001", "part", ask["thread"])
+        thread = json.loads(self.run_chat("aaaa0001", "dump").stdout)["threads"][0]
+        self.assertNotIn("aaaa0001", thread["participants"])
+        self.assertIn("aaaa0001", thread["parted"])
+        # 나간 세션에게는 멘션을 비운 답이 가지 않고 스레드에만 남는다
+        r = self.run_chat("bbbb0002", "post", "--reply-to", ask["id"], "--status", "answered", "써도 된다.")
+        self.assertIn("left this thread", r.stderr)
+        self.assertEqual(json.loads(self.run_chat("aaaa0001", "poll").stdout), [])
+        # 다시 멘션하면 돌아온다
+        self.run_chat("bbbb0002", "post", "--kind", "ask", "--reply-to", ask["id"], "--to", "aaaa0001", "다시 확인할 것 있나?")
+        self.assertEqual(len(json.loads(self.run_chat("aaaa0001", "poll").stdout)), 1)
+        thread = json.loads(self.run_chat("aaaa0001", "dump").stdout)["threads"][0]
+        self.assertNotIn("aaaa0001", thread["parted"])
+        # 스레드를 연 자리의 참여자는 기록하지 않고, 그 뒤 들어오고 나간 것만 시각과 경위로 남는다
+        self.assertEqual([(e["who"], e["what"], e.get("how"), e.get("by")) for e in thread["events"]],
+                         [("cccc0003", "joined", "joined", None), ("aaaa0001", "left", None, None), ("aaaa0001", "joined", "mentioned", "bbbb0002")])
+
+    def test_reply_rules_keep_answers_under_questions(self):
+        # 한 스레드의 글이 모두 첫 질문의 답글로 쌓이던 것을 막는다(2026-11-03 사용자 지적)
+        self.join("aaaa0001", "묻는 세션")
+        self.join("bbbb0002", "답하는 세션")
+        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "빌드", "빌드 언제 끝나?").stdout)
+        # 자기 글에는 답글을 달지 않는다
+        r = self.run_chat("aaaa0001", "post", "--kind", "info", "--reply-to", ask["id"], "덧붙임.", ok=False)
+        self.assertIn("own post", r.stderr)
+        # 알림은 답글이 아니라 새 글이다
+        r = self.run_chat("bbbb0002", "post", "--kind", "info", "--reply-to", ask["id"], "unity-batch 잡음.", ok=False)
+        self.assertIn("--top", r.stderr)
+        ans = json.loads(self.run_chat("bbbb0002", "post", "--reply-to", ask["id"], "--status", "answered", "10분 뒤.").stdout)
+        # 답에 답을 달 수는 없고, 이어 물을 것은 질문으로 단다
+        r = self.run_chat("aaaa0001", "post", "--reply-to", ans["id"], "--status", "answered", "알았다.", ok=False)
+        self.assertIn("--kind ask", r.stderr)
+        self.run_chat("aaaa0001", "post", "--kind", "ask", "--reply-to", ans["id"], "테스트도 포함인가?")
+        # 새로 시작하는 말은 자기 첫 글이 있는 스레드라도 새 글로 올린다
+        self.run_chat("aaaa0001", "post", "--kind", "info", "--top", "--reply-to", ask["id"], "단말은 안 쓴다.")
+        self.assertNotEqual(self.run_chat("aaaa0001", "post", "--top", "--reply-to", ask["id"], "답처럼 쓴 새 글.", ok=False).returncode, 0)
+
+    def test_closed_session_can_be_invited_and_mentioned(self):
+        # 꺼진 세션도 초대·멘션된다. 다시 켜지면 그사이 온 글을 받는다(2026-11-03 사용자 결정)
+        self.join("aaaa0001", "묻는 세션")
+        self.join("bbbb0002", "꺼진 세션")
+        self.run_chat("bbbb0002", "poll")
+        os.remove(os.path.join(self.home.name, ".cache", "session-chat", "alive", "bbbb0002"))
+        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "이어서", "멈춘 작업 이어 줄 수 있나?").stdout)
+        self.run_chat("user", "post", "--to", "bbbb0002", "--kind", "comment", "--reply-to", ask["id"], "부탁해")
+        self.assertEqual([m["text"] for m in json.loads(self.run_chat("bbbb0002", "poll").stdout)], ["멈춘 작업 이어 줄 수 있나?", "부탁해"])
+
+    def test_claim_wait_gets_one_notice_when_free(self):
+        self.join("aaaa0001", "쓰는 세션")
+        self.join("bbbb0002", "기다리는 세션")
+        self.run_chat("bbbb0002", "poll")
+        self.run_chat("aaaa0001", "claim", "unity-batch")
+        r = self.run_chat("bbbb0002", "claim", "unity-batch", "--wait", ok=False)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("wait list", r.stderr)
+        self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
+        self.run_chat("aaaa0001", "release", "unity-batch")
+        got = json.loads(self.run_chat("bbbb0002", "poll").stdout)
+        self.assertEqual([(m["kind"], m["quiet"]) for m in got], [("notice", False)])
+        self.assertIn("unity-batch", got[0]["text"])
+        self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
+        self.run_chat("bbbb0002", "claim", "unity-batch")
+
+    def test_claim_wait_notices_when_holder_leaves(self):
+        self.join("aaaa0001", "쓰는 세션")
+        self.join("bbbb0002", "기다리는 세션")
+        self.run_chat("bbbb0002", "poll")
+        self.run_chat("aaaa0001", "claim", "device-s22")
+        self.run_chat("bbbb0002", "claim", "device-s22", "--wait", ok=False)
+        self.run_chat("aaaa0001", "leave", "--user-asked")
+        got = json.loads(self.run_chat("bbbb0002", "poll").stdout)
+        self.assertEqual([m["kind"] for m in got], ["notice"])
 
     def test_yield_clears_busy_when_turn_ends_without_answer(self):
         self.join("aaaa0001", "묻는 세션")
