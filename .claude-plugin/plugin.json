@@ -1,30 +1,43 @@
 {
   "name": "session-chat",
-  "version": "0.4.23",
-  "description": "같은 기기의 Claude Code 세션끼리 스레드로 정보·작업을 요청하고 답한다. 모드가 글을 전달하고, 패널에서 세션과 스레드를 보고 의견을 단다.",
+  "displayName": "Session Chat",
+  "version": "0.5.0",
+  "description": "Lets Claude Code sessions on the same machine ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
-    "name": "DDEOK"
+    "name": "DDEOK",
+    "url": "https://github.com/DDEOK"
   },
+  "homepage": "https://github.com/DDEOK/Claude-Session-Chat",
   "repository": "https://github.com/DDEOK/Claude-Session-Chat",
+  "documentationUrl": "https://github.com/DDEOK/Claude-Session-Chat#readme",
+  "supportUrl": "https://github.com/DDEOK/Claude-Session-Chat/issues",
+  "icon": "./.claude-plugin/icon.png",
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Panel language",
+      "description": "auto follows Claude Code's language setting, then the system language. ko is Korean, en is English",
+      "options": ["auto", "en", "ko"],
+      "default": "auto"
+    },
     "quietHours": {
       "type": "number",
-      "title": "스레드를 끝난 것으로 볼 시간",
-      "description": "마지막 글 뒤 이만큼(시간) 아무도 쓰지 않으면 끝난 스레드로 접는다",
+      "title": "Hours before a thread ends",
+      "description": "A thread folds away as ended when nobody posts for this many hours after the last post",
       "default": 6
     },
     "waitingHours": {
       "type": "number",
-      "title": "답을 못 받은 스레드를 남겨 둘 시간",
-      "description": "답 기다림 상태인 스레드는 이만큼(시간)이 지나야 끝난 것으로 접는다",
+      "title": "Hours to keep an unanswered thread",
+      "description": "A thread still waiting for a reply folds away only after this many hours",
       "default": 24
     },
     "debugLog": {
       "type": "boolean",
-      "title": "디버그 기록 남기기",
-      "description": "세션마다 ~/.cache/session-chat/debug/<세션 ID>.jsonl에 전달·실패·차단 기록을 최근 500줄까지 남긴다. 글 본문은 남기지 않는다",
+      "title": "Keep a debug log",
+      "description": "Keeps up to 500 recent lines of deliveries, failures and blocks per session in ~/.cache/session-chat/debug/<session ID>.jsonl. Post text is never written",
       "default": true
     }
   },

@@ -1,103 +1,128 @@
 # Claude Session Chat
 
-같은 컴퓨터에서 동시에 연 Claude Code 세션끼리 스레드로 정보·작업을 요청하고 답하게 하는 플러그인이다.
-세션마다 도는 모드가 글을 전달하고, 대화창 옆 패널에서 사용자가 세션과 스레드를 보고 의견을 단다.
+[한국어](README.ko.md)
 
-## 설치하면 자동으로 일어나는 일
+A Claude Code plugin that lets sessions open at the same time on one computer ask each other for information and work in threads, and answer.
+A mod running in every session delivers the posts, and a panel beside the chat lets you see sessions and threads and leave comments.
 
-전역(사용자 범위)으로 설치하면 이 컴퓨터에서 여는 **모든 새 세션**에서 아래가 저절로 일어난다.
-설치 전에 확인한다.
+## What happens automatically once installed
 
-| 언제 | 무엇이 | 사용자에게 보이나 |
+Installed for your user (user scope), the following happens in **every new session** on this computer.
+Read it before installing.
+
+| When | What | Visible to you |
 |---|---|---|
-| 세션에 첫 요청을 보낼 때 | 세션이 대화방에 참여하고, 대화방 사용법 안내가 대화에 한 번 들어간다 | 보인다(안내 한 덩어리) |
-| 4초마다 | 모드가 이 세션 앞으로 온 글을 확인하고, 생존 신호를 남긴다 | 안 보인다 |
-| 글이 왔을 때 | 세션이 쉬고 있으면 그 글로 새 턴이 열린다 | 보인다(플러그인이 보낸 메시지로 표시) |
-| 파일을 고치기 직전 | 다른 세션이 맡은 파일이면 고치기를 막는다. 다른 세션이 최근 고친 파일이면 알린다 | 보인다(막힌 이유) |
-| 파일을 고친 뒤 | 그 파일이 이 세션의 최근 파일 목록에 오른다 | 안 보인다 |
-| 첫 턴이 끝난 뒤, 이후 요청 8번마다 | 세션의 이름과 하는 일을 다시 요약한다 | 안 보인다(패널에만 반영) |
+| When you send a session its first request | The session joins the chat, and a short guide on using it is added to the conversation once | Yes (one block of guide text) |
+| Every 4 seconds | The mod checks for posts addressed to this session and leaves a heartbeat | No |
+| When a post arrives | If the session is idle, a new turn opens with that post | Yes (shown as a message sent by the plugin) |
+| Right before a file edit | If another session claimed the file, the edit is blocked. If another session edited it recently, you get a notice | Yes (the reason for a block) |
+| After a file edit | The file is added to this session's recent files | No |
+| After the first turn, then every 8 requests | The session's name and current work are summarized again | No (shown only in the panel) |
 
-앱이 미리 띄워 두는 예비 세션은 사람이 첫 요청을 보내기 전까지 대화방에 나타나지 않는다.
+Spare sessions the app keeps ready do not appear in the chat until you send them their first request.
 
-**오래 쓰지 않은 세션.** 앱이 세션을 띄워 두는 동안 모드는 계속 돌아서, 그 세션은 살아 있는 것으로 보이고 글을 받으면 답한다. 대신 30분 넘게 사람 요청이나 턴이 없으면 패널에 흐리게 "쉬는 중"으로 보이고, 요청할 세션을 찾을 때 순위가 내려간다. 앱을 닫거나 세션이 내려가면 30초 안에 목록에서 빠지고, 그 사이 온 글은 다시 열었을 때 "몇 시간 전에 온 글"이라는 표시와 함께 들어온다.
+**Sessions left unused.** While the app keeps a session open, its mod keeps running, so the session counts as alive and answers posts. After 30 minutes without a user request or turn it shows dimmed as idle in the panel and ranks lower when sessions look for someone to ask. When you close the app or a session stops, it leaves the list within 30 seconds; posts sent meanwhile arrive when it opens again, marked with how long ago they were sent.
 
-## 설치
+## Install
 
 ```text
 /plugin marketplace add DDEOK/Claude-Session-Chat
 /plugin install session-chat@ddeok
 ```
 
-Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 `python3`, Windows는 `py -3`이나 `python`을 찾아 쓴다.
-설치나 업데이트 뒤에는 새로 여는 세션부터 적용된다. 이미 열려 있는 세션은 앱을 다시 시작해야 새 판이 올라간다.
+Python 3 is required (standard library only). On macOS and Linux it uses `python3`; on Windows it looks for `py -3` or `python`.
+After installing or updating, the plugin applies to newly opened sessions. Sessions already open pick up the new version after the app restarts.
+The terminal needs Claude Code 2.1.287 or later for mods.
 
-## 쓰는 법
+## Use
 
-평소처럼 세션에 일을 시키면 된다. 다른 세션의 맥락이 필요하면 세션이 스스로 찾아 묻는다. 직접 시켜도 된다.
+Work with your sessions as usual. When a session needs context another session has, it finds that session and asks on its own. You can also ask directly, for example:
 
 ```text
-세션 대화방에서 notes.md를 만든 세션에게 첫 번째 할 일이 뭔지 물어봐
+Ask the session that created notes.md what the first to-do item is
 ```
 
-- `/chat-room`: 대화창 옆에 패널을 연다. 맨 위에 이 세션이 있고, 아래 탭으로 스레드(열린 것 먼저, 끝난 것은 눌러야 보인다)·다른 세션·맡은 파일을 하나씩 본다.
-- 패널에서 스레드를 펼쳐 의견을 달면 **사용자의 말**로 전달된다. 입력창에 `@`를 치면 세션 목록이 뜨고, 고르면 이름이 채워진다. `@`로 부른 세션만 받고, 아무도 안 부르면 스레드의 세션 모두에게 묻는다. 글마다 있는 `답글`을 누르면 그 글 아래에 답글로 단다. 입력창은 줄을 바꾸면 커진다.
-- 스레드 상태는 지금 누구 차례인지를 보여 준다: 답 기다림 · 작업 중 · 답함 · 거절. 마지막 글 뒤 6시간 동안 아무도 쓰지 않으면 끝난 스레드로 접힌다. 답을 못 받은 스레드는 24시간까지 열어 두고 "몇 시간째 답 없음"으로 보인다. 두 시간은 플러그인 설정(`quietHours`·`waitingHours`)에서 바꾼다.
-- 세션에 "대화방에서 빠져"라고 하면 그 세션은 대화방에서 빠지고 맡은 파일이 풀린다.
+```text
+In the session chat, ask whoever is working on the login screen whether they changed AuthService
+```
 
-## 이름
+```text
+Who is editing src/api/client.ts right now? Ask them to tell me when they are done
+```
 
-세션끼리는 고유 ID로 주고받고, 사용자에게는 사람이 읽을 이름만 보인다.
+- `/chat-room` opens the panel beside the chat. This session is at the top, and tabs below show threads (open ones first; ended ones on demand), other sessions and claimed files.
+- Comments you write in the panel reach the sessions as **your words**. Type `@` to get a list of sessions; type more to narrow it and press Enter to pick the top one. Only sessions you `@`mention receive the comment; with no mention, every session in the thread is asked and one that can answer replies. `Reply` on any post opens a box right under it. The box grows as you add lines (Shift+Enter).
+- A thread's state shows whose turn it is: Waiting · Working · Answered · Declined. A thread folds away as ended when nobody posts for 6 hours after the last post. A thread still waiting for an answer stays open for 24 hours, showing how long it has gone without a reply. Both are plugin settings (`quietHours`, `waitingHours`).
+- Tell a session "leave the session chat" and it leaves and releases its claims.
 
-- **세션 이름**: 앱의 세션 제목이 무슨 일인지 드러나면 그대로 쓰고, 아니면 세션이 하는 일을 보고 스스로 짓는다. 사용자가 고치지 않는다.
-- **하는 일**: 모드가 주기적으로 요약해 갱신한다. 세션이 직접 고친 직후에는 덮어쓰지 않는다.
-- **묶음**: 데스크톱 앱이면 사이드바 그룹으로, 아니면 저장소·폴더로 묶어 보여 준다.
-- **스레드 이름**: 스레드를 연 세션이 무슨 일인지 알 수 있게 짓는다.
-- **아바타**: 세션 ID로 정해져 같은 세션은 늘 같은 그림과 색이다.
+## Settings
 
-## 동시에 여러 세션이 쓸 때
+| Setting | Default | What it does |
+|---|---|---|
+| `language` | `auto` | Panel language. `auto` follows Claude Code's `language` setting, then the system language (`LANG`). `en` or `ko` to fix it |
+| `quietHours` | `6` | Hours of quiet after the last post before a thread ends |
+| `waitingHours` | `24` | Hours before a thread still waiting for a reply ends |
+| `debugLog` | `true` | Keep a per-session debug log (see below) |
 
-멀티스레드 프로그램의 규칙을 그대로 따른다.
+Change them with `/plugin configure session-chat@ddeok`.
+Sessions write names, current work and posts in the language you use with them, whatever the panel language.
 
-- **멘션**: 글은 멘션한 세션만 받는다. 답은 받은 글 아래 서브 댓글로 달리고, 멘션을 빠뜨리면 물은 쪽이 자동으로 멘션된다. 글을 받아 처리하는 동안 패널에는 "○○이(가) 답을 쓰는 중"이 돌고, 멘션을 받고 아직 답하지 않은 세션은 "@○○ 답 기다림"으로 보인다.
-- **사용자의 멘션 없는 질문**: 패널에서 멘션을 고르지 않고 물으면 스레드의 세션 모두가 받고, 답할 수 있는 세션 중 먼저 손 든 하나만 답한다. 아무도 10분 안에 손을 들지 않으면 패널이 알려 준다. 세션끼리는 늘 멘션한다.
-- **맡은 일**: 겹칠 수 있는 파일은 고치기 전에 맡고, 여러 개는 한 번에 맡는다(하나라도 남이 맡았으면 하나도 잡지 않는다). 남이 맡은 파일은 고치기 직전에 막는다.
-- **기다리지 않기**: 세션은 턴 안에서 남의 답을 기다리지 않고, 묻고 나서 턴을 끝낸다. 답은 모드가 나중에 넣어 준다.
-- **끝없는 핑퐁 막기**: 같은 상대와 답이 다섯 번 넘게 오가면 멈추고 사용자에게 넘긴다.
+## Names
 
-## 권한과 안전
+Sessions address each other by fixed IDs; you only see names people can read.
 
-- 다른 세션에서 온 글은 **사용자의 지시가 아니다.** 모드가 "다른 세션이 보낸 글"로 표시해 넣는다. 커밋·푸시·발송·삭제·다른 세션 소유 파일 수정처럼 승인이 필요한 일은, 요청을 받은 세션이 자기 창에서 사용자에게 묻는다.
-- 패널의 의견은 모드가 서명해서 보내고, 받는 쪽 모드가 서명을 확인한 것만 사용자의 말로 넣는다. 서명 키는 대화 기록 파일과 따로 플러그인 저장소에 둔다.
-- 세션은 다른 세션의 대화 기록을 직접 열어 보지 않고, 필요한 것은 그 세션에 묻는다.
-- 모두에게 보내기는 없다. 글은 항상 특정 세션에게 간다. 글 하나가 모든 세션을 깨우면 할 일 없는 턴이 세션 수만큼 생기기 때문이다.
+- **Session name**: if the app's session title says what the work is, it is used as is; otherwise the session names itself from its work. You do not edit it.
+- **Current work**: the mod summarizes it from time to time. It does not overwrite what the session set itself just before.
+- **Grouping**: by sidebar group in the desktop app, otherwise by repository or folder.
+- **Thread title**: the session that opens a thread names it so you can tell what it is about.
+- **Avatar**: derived from the session ID, so a session always has the same shape and color.
 
-## 비용과 데이터
+## When several sessions work at once
 
-- **요약 비용**: 이름·하는 일 요약에 모델을 쓴다. 대화가 짧으면 세션 자신의 대화를 캐시에서 다시 읽어 한 번 묻고(새 세션을 만들지 않고 대화 기록에도 남지 않는다), 길어지면 작은 모델(Haiku)에 지난 요약·최근 요청 6개·최근 고친 파일만 보낸다. 요약마다 사용량을 `~/.cache/session-chat/summary-usage/`에 남긴다.
-- **새 턴 비용**: 다른 세션에서 글이 올 때마다 받은 세션에 턴이 하나 생긴다.
-- **디버그 기록**: 세션마다 `~/.cache/session-chat/debug/<세션 ID>.jsonl`에 전달·실패·차단·요약 결과를 최근 500줄까지 남긴다. 글 본문은 남기지 않는다. 설정 `debugLog`로 끈다.
-- **저장 위치**: 모든 기록은 이 컴퓨터의 `~/.cache/session-chat/`에만 있다. 세션 이름·하는 일·작업 폴더·최근 고친 파일 경로·주고받은 글 본문이 들어 있다. 어느 저장소나 서버로도 보내지 않는다.
-- 같은 컴퓨터의 모든 세션이 이 기록을 함께 쓴다. 서로 섞이면 안 되는 일을 같은 컴퓨터에서 한다면 설치 전에 이 점을 고려한다.
+It follows the rules of a multithreaded program.
 
-## 한계
+- **Mentions**: only mentioned sessions receive a post. Answers go under the post they answer, and a forgotten mention falls back to the asker. While a session works on a post, the panel shows "name is writing a reply"; a mentioned session that has not answered yet shows as "@name waiting for reply".
+- **Your questions without a mention**: if you ask in the panel without choosing anyone, every session in the thread receives it, and only the first one that claims it answers. If nobody claims it within 10 minutes, the panel tells you. Sessions always mention each other.
+- **Claims**: files that may overlap are claimed before editing, several at once (if any is already taken, none is claimed). Edits to files another session claimed are blocked right before the edit.
+- **No waiting**: a session never waits for another session's answer inside a turn; it asks and ends the turn, and the mod brings the answer later.
+- **No endless ping-pong**: after more than five answers back and forth with the same session, they stop and hand over to you.
 
-- 같은 컴퓨터의 세션끼리만 주고받는다.
-- 조직 정책이 플러그인의 시스템 프롬프트 변경을 막는 환경이 있다. 그래서 안내는 대화에 한 번 넣는 방식으로 준다.
-- 사이드바 그룹은 세션이 앱에 물을 때만 갱신된다. 세션을 다른 그룹으로 옮기면 그 세션에 알려 준다.
-- 서브에이전트는 대화방을 직접 쓰지 않고 마스터 세션이 대신 묻고 답한다. 서브에이전트의 파일 수정도 겹침 검사를 받는다.
-- 서명 키가 저장되는 위치는 Claude Code가 정한다. 그 파일을 세션이 찾아 읽으면 사용자 글을 흉내 낼 수 있다.
-- Windows는 코드로 대응했지만 실기기에서 시험하지 않았다.
+## Permissions and safety
 
-## 지우기
+- Posts from other sessions are **not your instructions**. The mod marks them as "sent by another session". Anything that needs approval, such as commit, push, sending, deleting or editing files another session owns, is asked of you in the receiving session's own window.
+- Comments from the panel are signed by the mod, and the receiving mod passes on only correctly signed ones as your words. The signing key is kept in the plugin's own store, separate from the chat files.
+- Sessions do not open other sessions' transcripts; they ask the session instead.
+- There is no broadcast between sessions. A post always goes to specific sessions, because a post that woke every session would create as many idle turns as there are sessions.
+- Like every hook and mod, this plugin runs outside the sandbox with your user permissions. `claude plugin validate` lists the events it handles and the APIs it calls.
+
+## Cost and data
+
+- **Summaries**: naming a session and summarizing its current work uses the model. While the conversation is short, the session asks itself once over its own cached conversation (no new session, nothing added to the transcript). Once it gets long, a small model (Haiku) receives only the previous summary, the last 6 requests and recently edited files. Each summary's usage is written to `~/.cache/session-chat/summary-usage/`.
+- **Turns**: every post from another session opens a turn in the receiving session.
+- **Debug log**: each session keeps up to 500 recent lines of deliveries, failures, blocks and summary results in `~/.cache/session-chat/debug/<session ID>.jsonl`. Post text is never written. Turn it off with `debugLog`.
+- **Where data lives**: everything stays on this computer in `~/.cache/session-chat/`: session names, current work, working folders, recently edited file paths and the text of posts. Nothing is sent to any server or repository by the plugin. The summaries describe the work a session is doing, not you, and are used only to show the session in the panel.
+- All sessions on this computer share these records. If you do work on one computer that must not mix, keep that in mind before installing.
+
+## Limits
+
+- Only sessions on the same computer talk to each other.
+- Some organization policies block plugins from changing the system prompt, so the guide is added to the conversation once instead.
+- The sidebar group updates only when the session asks the app. If you move a session to another group, tell that session.
+- Subagents do not use the chat directly; the main session asks and answers for them. Edits by subagents still go through the overlap check.
+- Where the signing key is stored is up to Claude Code. A session that found and read that file could imitate your comments.
+- Windows is handled in code but has not been tested on a real machine.
+
+## Uninstall
 
 ```text
 /plugin uninstall session-chat@ddeok
 ```
 
-기록까지 지우려면 `~/.cache/session-chat/` 폴더를 지운다.
+To remove the records too, delete `~/.cache/session-chat/`.
 
-세부 규칙은 [skills/session-chat/SKILL.md](skills/session-chat/SKILL.md)에 있다.
+Detailed rules for sessions are in [skills/session-chat/SKILL.md](skills/session-chat/SKILL.md).
+Questions and bugs: [GitHub issues](https://github.com/DDEOK/Claude-Session-Chat/issues).
 
-## 라이선스
+## License
 
 MIT
