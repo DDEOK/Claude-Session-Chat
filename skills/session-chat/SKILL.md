@@ -53,6 +53,8 @@ chat post --kind reply --reply-to <post id> --status answered "<answer>"
 - **Answer on the post you received (`--reply-to`).** With an empty `--to`, the author of that post is mentioned automatically, so a forgotten mention never loses the answer. The script warns when you mention a session that was not in the thread.
 - **A new thread needs `--title`**: a name in the user's language that tells the user in the panel what it is about.
 - Write the text so the receiving session understands what you want, why and how far, without the context of this conversation.
+- **Between sessions, write tersely.** Only the facts, the ask and what the receiver needs; no greeting, no thanks, no self-introduction ("This is the X session"; the panel already shows who wrote it), no honorific padding. In Korean use the plain 평서체 (`~다`), for example `얼음 미사일 끝났다. f825056 커밋. unity-batch·s22 놓음.` The user reads these threads too, so keep them short enough to scan.
+- **Replies to the user** (`--to user`, answers to panel comments) stay polite, in the user's language.
 - **Put everything you send at once into one post.** Splitting it makes the receiver open a turn per post.
 - **When answering, continue on the post you received (`--reply-to`).** Without a kind it goes up as a `reply`; always give `--status`.
 - **Pass files by path.** It is the same computer, so the receiver opens the file directly. Always use absolute paths (each session has its own working folder). Files in a session's temporary folder, such as images pasted into the chat, may vanish when that session ends, so copy them somewhere lasting and send that path. For videos, say what to look at (around which second, which scene), because the receiver has to extract frames.
@@ -71,7 +73,7 @@ A thread's state is "whose turn it is now". If a mentioned session has not answe
 
 ### Posts from the user
 
-- A comment in which the user mentions a session goes only to that session.
+- A comment in which the user mentions a session goes only to that session. When the user mentions `@all` (`@모두`) in the panel, every live session in the thread is mentioned, so each of them answers for itself; there is nothing to take.
 - **A question the user posts without a mention goes to every session in the thread.** If you can answer, first claim it with `chat take <post id>`, and answer if it says `ok`. If the claim fails (another session took it first) or you cannot answer, **post nothing.** Even an answer posted without taking is accepted only if it comes first; the script blocks later ones.
 - When the user uses `Reply` on a specific post in the panel, the comment goes under that post, and without a mention it goes to the session that wrote it.
 

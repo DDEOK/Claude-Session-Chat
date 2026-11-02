@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session chat</title>
+<style>
+/* 패널과 같은 정보를 브라우저로 보는 읽기 전용 페이지. 글은 패널에서만 쓴다(서명 키가 모드에만 있다) */
+:root {
+  --bg: #faf9f7; --card: #ffffff; --text: #1f1e1c; --muted: #6b6862; --line: #e3e0da; --soft: #f2efe9;
+  --accent: #c96442; --link: #2f6fb5; --success: #2f7d4f; --warning: #a86a12; --error: #b5412f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1b19; --card: #252421; --text: #ecebe8; --muted: #a29f98; --line: #3a3834; --soft: #2f2d2a;
+    --accent: #e0896a; --link: #7fb0e8; --success: #6cc58f; --warning: #e0b25a; --error: #e8806e;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1b19; --card: #252421; --text: #ecebe8; --muted: #a29f98; --line: #3a3834; --soft: #2f2d2a;
+  --accent: #e0896a; --link: #7fb0e8; --success: #6cc58f; --warning: #e0b25a; --error: #e8806e;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", sans-serif; }
+main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+.top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h1 { font-size: 20px; margin: 0; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.tabs { display: flex; gap: 8px; margin: 16px 0 4px; flex-wrap: wrap; }
+.tabs button { font: inherit; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+.tabs button.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin-top: 12px; }
+.card.open { border-color: var(--muted); }
+.head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.head .right { display: flex; gap: 8px; align-items: center; flex: none; }
+.btn { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 8px; border: none; background: var(--soft); color: var(--text); cursor: pointer; }
+.btn.dim { color: var(--muted); }
+.people { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 4px; margin-top: 6px; }
+.people.named { column-gap: 14px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; }
+hr.head-line { border-top-color: var(--muted); opacity: .5; margin: 10px 0 2px; }
+.state { font-weight: 600; }
+.post { display: flex; gap: 10px; margin-top: 12px; }
+.post .body { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.meta { font-size: 12px; color: var(--muted); }
+.meta .to { color: var(--link); }
+.reply { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+.reply .post { margin-top: 0; }
+hr { border: none; border-top: 1px solid var(--line); margin: 14px 0 2px; }
+.avatar { width: 28px; height: 28px; border-radius: 8px; flex: none; }
+.avatar.sm { width: 22px; height: 22px; border-radius: 6px; }
+.avatar.idle { opacity: .35; }
+.dot { width: 28px; height: 28px; border-radius: 8px; flex: none; display: inline-block; }
+.group { margin-top: 18px; }
+.row { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+.row .txt { min-width: 0; }
+.row .doing { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mine { border: 1px solid var(--accent); border-radius: 12px; padding: 10px 14px; margin-top: 14px; }
+.mine .label { color: var(--accent); font-weight: 600; font-size: 12px; }
+.note { margin-top: 18px; font-size: 12px; color: var(--muted); }
+.warn { color: var(--warning); }
+.err { color: var(--error); }
+.spin { color: var(--link); }
+.more { font: inherit; margin-top: 12px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <h1 id="title">Session chat</h1>
+    <span class="muted" id="counts"></span>
+  </div>
+  <div class="tabs" id="tabs"></div>
+  <div id="view"></div>
+  <p class="note" id="note"></p>
+</main>
+<script>
+const T = {
+  en: { title: 'Session chat', sessions: n => `${n} sessions`, open: n => `${n} open threads`, threads: 'Threads', others: 'Other sessions',
+    waiting: 'Waiting', working: 'Working', answered: 'Answered', declined: 'Declined', info: 'Notice', ended: 'Ended',
+    reply: 'Reply', ask: 'Question', request: 'Request', comment: 'Comment', done: 'done', partial: 'in progress', declinedR: 'declined',
+    everyone: 'Everyone in the thread', me: 'Me', endedS: 'ended', pending: 'Getting ready', firstTask: 'Waiting for its first task',
+    noReply: q => `no reply for ${q}`, quiet: q => `quiet for ${q}`, posts: n => `posts ${n}`, writing: w => `${w} is writing a reply`,
+    waitFor: w => `${w} waiting for reply`, nobody: 'Nobody answered the question without a mention. Ask again with an @mention',
+    openQ: 'Question without a mention: waiting for a session that can answer', none: 'No threads yet', noneOpen: 'No open threads',
+    noOthers: 'No other sessions are open', showEnded: n => `Show ${n} ended threads`, hideEnded: 'Hide ended threads',
+    expand: 'Expand', collapse: 'Collapse', showNames: '≡ Names', hideNames: '≡ Hide names',
+    noFolder: 'Sessions without a folder', unknown: 'Unknown location',
+    note: 'Read-only view. Comments are written in the /chat-room panel. Refreshes every few seconds.', fail: 'The page server has stopped. Press "Open in browser" in the panel again.' },
+  ko: { title: '세션 대화방', sessions: n => `세션 ${n}`, open: n => `열린 스레드 ${n}`, threads: '스레드', others: '다른 세션',
+    waiting: '답 기다림', working: '작업 중', answered: '답변 완료', declined: '거절됨', info: '알림', ended: '끝남',
+    reply: '답변', ask: '질문', request: '작업 요청', comment: '의견', done: '완료', partial: '작업 중', declinedR: '거절',
+    everyone: '스레드 모두에게', me: '나', endedS: '종료됨', pending: '준비 중', firstTask: '첫 작업을 기다리는 중',
+    noReply: q => `${q}째 답 없음`, quiet: q => `${q}째 새 글 없음`, posts: n => `글 ${n}`, writing: w => `${w}이(가) 답을 쓰는 중`,
+    waitFor: w => `${w} 답 기다림`, nobody: '멘션 없는 질문에 아무도 답하지 않았습니다. 세션을 멘션해 다시 물어보세요',
+    openQ: '멘션 없는 질문: 답할 수 있는 세션을 기다리는 중', none: '아직 스레드가 없습니다', noneOpen: '열린 스레드가 없습니다',
+    noOthers: '지금 열려 있는 다른 세션이 없습니다', showEnded: n => `끝난 스레드 ${n}개 보기`, hideEnded: '끝난 스레드 숨기기',
+    expand: '펼치기', collapse: '접기', showNames: '≡ 이름', hideNames: '≡ 이름 숨기기',
+    noFolder: '폴더 없이 연 세션', unknown: '위치 모름',
+    note: '보기 전용 페이지입니다. 의견은 /chat-room 패널에서 씁니다. 몇 초마다 새로 고칩니다.', fail: '페이지 서버가 꺼졌습니다. 패널의 「브라우저로 보기」를 다시 누르세요.' },
+}
+const STATE_COLOR = { waiting: 'warning', working: 'link', answered: 'success', declined: 'error', info: 'muted' }
+let ui = { tab: 'threads', open: new Set(), names: new Set(), showEnded: false }
+let snap = null
+let t = T.en
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+function who(pid) {
+  if (pid === 'user') return { label: t.me, shape: 'user', hex: '#3D3A36' }
+  const [base, sub] = pid.split('.')
+  const p = snap.sessions[base] || (snap.names || {})[base]
+  const name = p?.title ? (snap.sessions[base] ? p.title : `${p.title} (${t.endedS})`) : t.pending
+  return { label: sub ? `${name} · ${sub}` : name, shape: p?.avatar?.shape || 'terminal', hex: p?.avatar?.hex || '#5F6B7A' }
+}
+// 아바타 그림의 색 자리(#COLOR)를 채워 data URL로 쓴다. 그림을 못 받으면 색 칸으로 대신한다
+const svgs = {}
+async function loadSvg(shape) {
+  if (shape in svgs) return
+  svgs[shape] = ''
+  try { svgs[shape] = await (await fetch(`/avatars/${shape}.svg`)).text() } catch {}
+  render()
+}
+function avatar(w, cls = '') {
+  const src = svgs[w.shape]
+  if (src === undefined) loadSvg(w.shape)
+  if (!src) return `<span class="dot ${cls}" style="background:${esc(w.hex)}"></span>`
+  return `<img class="avatar ${cls}" alt="" src="data:image/svg+xml;utf8,${encodeURIComponent(src.replaceAll('#COLOR', w.hex))}">`
+}
+function message(p, depth) {
+  const w = who(p.from)
+  const tag = p.kind === 'reply' ? `${t.reply} · ${({ answered: t.done, partial: t.partial, declined: t.declinedR })[p.status] || p.status}` : (t[p.kind] || p.kind)
+  const to = p.open ? t.everyone : p.to.map(x => '@' + who(x).label).join(' ')
+  return `<div class="post">${avatar(w, depth ? 'sm' : '')}<div class="body"><div class="meta"><b style="color:var(--text)">${esc(w.label)}</b> ${esc(p.ts.slice(11, 16))} · ${esc(tag)} · <span class="to">${esc(to)}</span></div>${esc(p.text)}</div></div>`
+}
+function conversation(th) {
+  const all = [th.root, ...th.posts]
+  const ids = new Set(all.map(p => p.id))
+  const children = new Map()
+  const tops = [th.root]
+  for (const p of th.posts) {
+    if (p.top) { tops.push(p); continue }
+    const parent = p.reply_to && ids.has(p.reply_to) ? p.reply_to : th.root.id
+    children.set(parent, [...(children.get(parent) || []), p])
+  }
+  let out = ''
+  let n = 0
+  const walk = (p, depth) => {
+    if (depth === 0 && n++ > 0) out += '<hr>'
+    out += depth === 0 ? message(p, 0) : `<div class="reply" style="margin-left:${Math.min(depth, 4) * 20}px">${message(p, depth)}</div>`
+    for (const c of children.get(p.id) || []) walk(c, depth + 1)
+  }
+  for (const p of tops) walk(p, 0)
+  return out
+}
+// 패널과 같은 구성: 제목 줄(상태 · 제목 … 글 수 · 펼치기) → 참여 세션 아이콘 줄(≡ 이름으로 이름 보기) → 가로선 → 상태 글 → 대화.
+// 보기 전용이라 세션 끼우기(+ 세션)는 없다. 가로선은 펼쳤거나 상태 글이 있을 때만 긋는다
+function threadCard(th) {
+  const isOpen = ui.open.has(th.id)
+  const names = ui.names.has(th.id)
+  const st = th.closed ? t.ended : (t[th.state] || th.state)
+  const color = th.closed ? 'muted' : (STATE_COLOR[th.state] || 'muted')
+  const quiet = !th.closed && th.quiet ? ` · ${th.state === 'waiting' ? t.noReply(th.quiet) : t.quiet(th.quiet)}` : ''
+  const count = th.posts.length ? `<span class="muted">${esc(t.posts(th.posts.length + 1))}</span>` : ''
+  const members = th.participants.filter(p => p !== 'user')
+  const icons = members.map(p => {
+    const w = who(p)
+    const gone = !snap.sessions[p.split('.')[0]]
+    return names ? `<span class="chip">${avatar(w, gone ? 'idle' : '')}<span class="muted">${esc(w.label)}</span></span>` : avatar(w, gone ? 'idle' : '')
+  }).join('')
+  const busy = th.busy.map(b => `<div class="spin">⋯ ${esc(t.writing(who(b).label))}</div>`).join('')
+  const pend = th.pending.filter(p => !th.busy.includes(p.who))
+  const pendTxt = pend.length ? `<div class="warn">${esc(t.waitFor(pend.map(p => '@' + who(p.who).label).join(' ')))}</div>` : ''
+  const openQ = th.open && !th.open.taker ? `<div class="${th.open.nobody ? 'err' : 'warn'}">${esc(th.open.nobody ? t.nobody : t.openQ)}</div>` : ''
+  const status = busy + pendTxt + openQ
+  return `<div class="card ${isOpen ? 'open' : ''}">
+    <div class="head"><div><span class="state" style="color:var(--${color})">● ${esc(st)}</span><span class="muted">${esc(quiet)}</span> <b>${esc(th.title)}</b></div>
+      <div class="right">${count}<button class="btn" data-thread="${esc(th.id)}">${esc(isOpen ? t.collapse : t.expand)}</button></div></div>
+    <div class="people ${names ? 'named' : ''}">${icons}<button class="btn dim" data-names="${esc(th.id)}">${esc(names ? t.hideNames : t.showNames)}</button></div>
+    ${isOpen || status ? '<hr class="head-line">' : ''}${status}${isOpen ? conversation(th) : ''}</div>`
+}
+function project(p) {
+  if (p.group) return p.group
+  const place = p.repo || p.cwd || ''
+  if (/[\\/]\.claude[\\/]spares[\\/]/.test(place)) return t.noFolder
+  return place.split(/[\\/]/).filter(Boolean).pop() || t.unknown
+}
+function sessionRow(id, p) {
+  const w = who(id)
+  return `<div class="row">${avatar(w, p.idle ? 'idle' : '')}<div class="txt"><b>${esc(p.title || t.pending)}</b><div class="doing">${esc(p.doing || t.firstTask)}</div></div></div>`
+}
+function render() {
+  if (!snap) return
+  t = T[snap.lang] || T.en
+  document.documentElement.lang = snap.lang || 'en'
+  document.title = t.title
+  document.getElementById('title').textContent = t.title
+  const threads = snap.threads || []
+  const live = threads.filter(x => !x.closed)
+  const ended = threads.filter(x => x.closed)
+  const ids = Object.keys(snap.sessions)
+  document.getElementById('counts').textContent = `${t.sessions(ids.length)} · ${t.open(live.length)}`
+  document.getElementById('tabs').innerHTML = `<button data-tab="threads" class="${ui.tab === 'threads' ? 'on' : ''}">${esc(t.threads)} ${live.length}</button><button data-tab="sessions" class="${ui.tab === 'sessions' ? 'on' : ''}">${esc(t.others)} ${ids.length}</button>`
+  let html = ''
+  if (ui.tab === 'threads') {
+    const shown = [...live, ...(ui.showEnded ? ended : [])]
+    html = shown.length ? shown.map(threadCard).join('') : `<p class="muted">${esc(ended.length ? t.noneOpen : t.none)}</p>`
+    if (ended.length) html += `<button class="more" data-ended>${esc(ui.showEnded ? t.hideEnded : t.showEnded(ended.length))}</button>`
+  } else {
+    // 브라우저에는 "이 세션"이 없으므로 살아 있는 세션 전부를 묶음별로 보인다. 묶음 안에서는 활동 중인 세션이 먼저다
+    const groups = new Map()
+    for (const id of ids) { const g = project(snap.sessions[id]); groups.set(g, [...(groups.get(g) || []), id]) }
+    for (const list of groups.values()) list.sort((a, b) => Number(Boolean(snap.sessions[a].idle)) - Number(Boolean(snap.sessions[b].idle)))
+    html = ids.length ? [...groups].map(([g, list]) => `<div class="group"><div class="muted">${esc(g)}</div>${list.map(id => sessionRow(id, snap.sessions[id])).join('')}</div>`).join('') : `<p class="muted">${esc(t.noOthers)}</p>`
+  }
+  document.getElementById('view').innerHTML = html
+  document.getElementById('note').textContent = t.note
+}
+document.addEventListener('click', e => {
+  const tab = e.target.closest('[data-tab]')
+  if (tab) { ui.tab = tab.dataset.tab; render(); return }
+  const nm = e.target.closest('[data-names]')
+  if (nm) { const id = nm.dataset.names; ui.names.has(id) ? ui.names.delete(id) : ui.names.add(id); render(); return }
+  const head = e.target.closest('[data-thread]')
+  if (head) { const id = head.dataset.thread; ui.open.has(id) ? ui.open.delete(id) : ui.open.add(id); render(); return }
+  if (e.target.closest('[data-ended]')) { ui.showEnded = !ui.showEnded; render() }
+})
+let last = ''
+async function poll() {
+  try {
+    const text = await (await fetch('/state.json', { cache: 'no-store' })).text()
+    if (text !== last) { last = text; snap = JSON.parse(text); render() }
+  } catch {
+    document.getElementById('note').textContent = (t || T.en).fail
+  }
+}
+poll()
+setInterval(poll, 3000)
+</script>
+</body>
+</html>

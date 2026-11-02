@@ -224,6 +224,72 @@ class SessionChatTest(unittest.TestCase):
         board = json.loads(self.run_chat("bbbb0002", "dump").stdout)["board"]
         self.assertEqual([c["by"] for c in board], ["aaaa0001"])
 
+    def test_serve_is_read_only_and_local(self):
+        import socket
+        import urllib.error
+        import urllib.request
+
+        self.join("aaaa0001", "웹 시험 세션")
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        proc = subprocess.Popen([sys.executable, SCRIPT, "--lang", "ko", "serve", "--port", str(port)], stdout=subprocess.PIPE, env=self.env, text=True)
+        try:
+            self.assertIn(f"127.0.0.1:{port}", proc.stdout.readline())
+            base = f"http://127.0.0.1:{port}"
+            state = json.loads(urllib.request.urlopen(f"{base}/state.json").read())
+            self.assertEqual(state["lang"], "ko")
+            self.assertIn("aaaa0001", state["sessions"])
+            self.assertIn("<html", urllib.request.urlopen(f"{base}/").read().decode())
+            # 글을 받지 않고, 정해진 파일 밖은 내주지 않는다
+            for req in (urllib.request.Request(f"{base}/state.json", data=b"x", method="POST"), f"{base}/../scripts/session-chat.py"):
+                with self.assertRaises(urllib.error.HTTPError):
+                    urllib.request.urlopen(req)
+        finally:
+            proc.terminate()
+            proc.wait()
+            proc.stdout.close()
+
+    def test_serve_detach_reuses_one_server_and_stops_when_unwatched(self):
+        import time
+        import urllib.request
+
+        web = os.path.join(self.home.name, ".cache", "session-chat", "web.json")
+        first = self.run_chat("aaaa0001", "serve", "--detach").stdout.strip()
+        rec = json.load(open(web, encoding="utf-8"))
+        try:
+            # 두 번째 호출은 새로 띄우지 않고 같은 서버를 돌려준다. 그때의 언어는 서버를 다시 띄우지 않고 반영된다
+            self.assertEqual(self.run_chat("bbbb0002", "--lang", "ko", "serve", "--detach").stdout.strip(), first)
+            self.assertEqual(json.load(open(web, encoding="utf-8"))["pid"], rec["pid"])
+            state = json.loads(urllib.request.urlopen(f"{first}state.json").read())
+            self.assertEqual(state["token"], rec["token"])
+            self.assertEqual(state["lang"], "ko")
+        finally:
+            os.kill(rec["pid"], 15)
+        # 꺼진 뒤 다시 부르면 같은 번호로 새 서버가 뜬다
+        time.sleep(0.3)
+        again = self.run_chat("aaaa0001", "serve", "--detach").stdout.strip()
+        rec2 = json.load(open(web, encoding="utf-8"))
+        os.kill(rec2["pid"], 15)
+        self.assertEqual(again, first)
+        self.assertNotEqual(rec2["token"], rec["token"])
+
+    def test_serve_stops_when_no_page_asks(self):
+        import socket
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        proc = subprocess.Popen([sys.executable, SCRIPT, "serve", "--port", str(port), "--idle", "1"], stdout=subprocess.DEVNULL, env=self.env)
+        try:
+            proc.wait(timeout=10)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        web = json.load(open(os.path.join(self.home.name, ".cache", "session-chat", "web.json"), encoding="utf-8"))
+        # 번호는 남기고 표식은 지운다
+        self.assertEqual(web, {"port": port})
+
     def test_release_several_and_all(self):
         self.join("aaaa0001", "맡는 세션")
         other = os.path.join(self.work, "other.md")

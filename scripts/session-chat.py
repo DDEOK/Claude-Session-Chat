@@ -733,6 +733,10 @@ def cmd_leave(a):
 
 def cmd_dump(a):
     """For the panel: live sessions, threads, claims and overlaps in one object."""
+    print(json.dumps(_dump_data(a.quiet_hours, a.waiting_hours, a.limit), ensure_ascii=False))
+
+
+def _dump_data(quiet_hours, waiting_hours, limit):
     live = _live_sessions()
     for sid, p in live.items():
         av = p.get("avatar", {"shape": "terminal", "color": "slate"})
@@ -741,14 +745,140 @@ def cmd_dump(a):
         idle = _idle(p)
         p["idle"] = _ago(idle) if idle > IDLE else ""
         p.pop("recent", None)
-    threads = sorted(_thread_states(a.quiet_hours, a.waiting_hours).values(), key=lambda t: t["updated"], reverse=True)[: a.limit]
+    threads = sorted(_thread_states(quiet_hours, waiting_hours).values(), key=lambda t: t["updated"], reverse=True)[:limit]
     board = [{"target": t, **c} for t, c in sorted(_load("board.json", {}).items()) if _is_live(c["by"])]
     # 스레드에 나오는 떠난 세션의 이름·아바타. 살아 있는 목록에는 없으므로 따로 싣는다
     names = {}
     for sid, p in _load("sessions.json", {}).items():
         av = p.get("avatar", {"shape": "terminal", "color": "slate"})
         names[sid] = {"title": p.get("title", ""), "avatar": {**av, "hex": COLORS.get(av.get("color"), COLORS["slate"])}}
-    print(json.dumps({"sessions": live, "names": names, "threads": threads, "board": board}, ensure_ascii=False))
+    return {"sessions": live, "names": names, "threads": threads, "board": board}
+
+
+# 웹 페이지 서버를 하나만 두기 위한 기록(web.json): 번호(port)와 지금 도는 서버의 표식(token).
+# 번호는 처음에 운영체제가 고른 빈 번호이고, 서버가 내려가도 남겨 두어 다음에 같은 주소로 다시 띄운다
+WEB_IDLE = 300
+
+
+def _web_alive(rec):
+    """기록의 서버가 살아 있고 우리 서버(표식이 같은)인지 본다. 같은 번호를 다른 프로그램이 잡았으면 False."""
+    import urllib.request
+
+    if not rec.get("port") or not rec.get("token"):
+        return False
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{rec['port']}/state.json?probe=1", timeout=1) as r:
+            return json.load(r).get("token") == rec["token"]
+    except Exception:
+        return False
+
+
+def cmd_serve(a):
+    """Read-only web page of the chat at http://127.0.0.1:<port>/. Listens on this computer only and accepts no writes.
+
+    Comments stay in the panel: they are signed with a key only the mod holds, so a page that could post would let anything on this computer speak as the user.
+    With --detach (what the mod uses) it starts one server apart from the calling session, or reuses the one already running, prints its address and returns.
+    The server stops by itself when no page has asked for the state for WEB_IDLE seconds.
+    """
+    if a.detach:
+        return _serve_detached(a)
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+
+    page = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "index.html")
+    token = a.token or uuid.uuid4().hex
+    last_seen = [time.time()]
+
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, code, body, kind):
+            data = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/state.json":
+                # 자기 확인용 요청(probe)은 세지 않는다. 페이지가 묻는 것만 "보고 있다"로 센다
+                if "probe=1" not in self.path:
+                    last_seen[0] = time.time()
+                state = _dump_data(a.quiet_hours, a.waiting_hours, a.limit)
+                # 언어는 기록(web.json)에서 매번 읽는다. 버튼을 누를 때 그때의 언어를 적어 두므로, 설정을 바꾸면 서버를 다시 띄우지 않아도 바로 반영된다
+                state["lang"] = _load("web.json", {}).get("lang") or LANG
+                state["token"] = token
+                self._send(200, json.dumps(state, ensure_ascii=False), "application/json; charset=utf-8")
+            elif path in ("/", "/index.html"):
+                with open(page, encoding="utf-8") as f:
+                    self._send(200, f.read(), "text/html; charset=utf-8")
+            elif re.fullmatch(r"/avatars/[a-z]+\.svg", path) and os.path.exists(os.path.join(os.path.dirname(page), "..", path.lstrip("/"))):
+                with open(os.path.join(os.path.dirname(page), "..", path.lstrip("/")), encoding="utf-8") as f:
+                    self._send(200, f.read(), "image/svg+xml; charset=utf-8")
+            else:
+                self._send(404, "not found", "text/plain; charset=utf-8")
+
+        def log_message(self, format, *args):
+            pass
+
+    # 정한 번호를 먼저 잡아 보고, 막혀 있으면 운영체제가 고른 빈 번호로 띄운다
+    server = None
+    for port in ([a.port] if a.port else []) + [0]:
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            break
+        except OSError:
+            continue
+    assert server is not None
+    port = server.server_address[1]
+    idle = a.idle or WEB_IDLE
+    _save("web.json", {"port": port, "token": token, "pid": os.getpid(), "lang": LANG})
+
+    def stop_when_idle():
+        while True:
+            time.sleep(min(60, idle))
+            if time.time() - last_seen[0] > idle:
+                # 번호는 남기고 표식만 지운다. 다음에 같은 주소로 다시 띄우기 위해서다
+                rec = _load("web.json", {})
+                if rec.get("token") == token:
+                    _save("web.json", {"port": port})
+                server.shutdown()
+                return
+
+    threading.Thread(target=stop_when_idle, daemon=True).start()
+    print(f"http://127.0.0.1:{port}/", flush=True)
+    server.serve_forever()
+
+
+def _serve_detached(a):
+    rec = _load("web.json", {})
+    if _web_alive(rec):
+        if rec.get("lang") != LANG:
+            with _Lock():
+                rec = _load("web.json", {})
+                rec["lang"] = LANG
+                _save("web.json", rec)
+        print(f"http://127.0.0.1:{rec['port']}/")
+        return
+    token = uuid.uuid4().hex
+    args = [sys.executable, os.path.abspath(__file__), "--lang", LANG, "serve", "--token", token, "--port", str(rec.get("port") or 0),
+            "--quiet-hours", str(a.quiet_hours), "--waiting-hours", str(a.waiting_hours), "--limit", str(a.limit)]
+    # 부른 세션과 떨어진 프로세스로 띄운다. 모드 문서대로 "명령이 놓아 준 프로세스"는 세션이 끝나도 남는다
+    kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
+    if os.name == "nt":
+        kw["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0x8) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
+    else:
+        kw["start_new_session"] = True
+    subprocess.Popen(args, **kw)
+    # 서버가 번호를 잡고 기록을 쓸 때까지 기다린다
+    for _ in range(50):
+        time.sleep(0.1)
+        rec = _load("web.json", {})
+        if rec.get("token") == token:
+            print(f"http://127.0.0.1:{rec['port']}/")
+            return
+    sys.exit("The web page server did not start.")
 
 
 def cmd_paths(a):
@@ -819,6 +949,14 @@ def main():
     s = sub.add_parser("dump", help="State for the panel")
     s.add_argument("--quiet-hours", type=float, default=6, help="Hours of quiet after the last post before a thread counts as ended")
     s.add_argument("--waiting-hours", type=float, default=24, help="Hours before a thread still waiting for a reply counts as ended")
+    s.add_argument("--limit", type=int, default=30)
+    s = sub.add_parser("serve", help="Read-only web page of the chat on 127.0.0.1")
+    s.add_argument("--detach", action="store_true", help="Start one server apart from this session (or reuse the running one), print its address and return")
+    s.add_argument("--port", type=int, default=0, help="Port to try first; 0 lets the system choose")
+    s.add_argument("--token", help=argparse.SUPPRESS)
+    s.add_argument("--idle", type=float, default=0, help=argparse.SUPPRESS)
+    s.add_argument("--quiet-hours", type=float, default=6)
+    s.add_argument("--waiting-hours", type=float, default=24)
     s.add_argument("--limit", type=int, default=30)
     sub.add_parser("paths", help="Storage location")
     sub.add_parser("whoami", help="This session's ID")
