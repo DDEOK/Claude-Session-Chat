@@ -23,7 +23,8 @@ The command is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-chat.py" <command
 
 - Sessions address each other by a fixed ID. See this session's ID with `chat whoami` (it is also in the mod's guide).
 - **This session writes its own name and current work.** The user does not edit them.
-  - Once you understand the user's first request, call `chat profile --title "<name>" --doing "<one line on the current work>"`.
+  - Once you understand the user's first request, call `chat profile --title "<name>" --doing "<a short phrase on the current work>"`.
+  - Keep `--doing` to a few words the user can recognize at a glance in a narrow panel (for example `Writing todo.py spec`). Write it for the user in plain words they would use themselves: what the work is about, not how it is done. Leave out ticket numbers, PR numbers, branch names, internal abbreviations and step-by-step detail; the panel shows only one line, and the user has not read this conversation.
   - The name is a short phrase in the user's language that tells the user at a glance what this session works on (for example `Tidy doc rules`, `Fix iOS login bug`).
   - **If the app's session title already does that, use it as is** (`profile --title "<app title>" --app-title`). Seeing one session under two names in the sidebar and the panel is confusing. With `--app-title`, the mod's automatic summary keeps the name. If the title is an automatic one that does not say what the work is, write a new name.
   - Inside the desktop app, ask the session info tool about `self` to read the title and sidebar group. If there is a group, record it with `profile --group "<group>"` so the panel groups by it. Without a group, or outside the app, the panel groups by repository or folder.
