@@ -429,6 +429,7 @@ async function pickView($: any, v: string) {
   $.ui.invalidate('ui.render')
 }
 
+
 async function toggleClosed($: any) {
   await update($, showClosed, cur => !cur)
   $.ui.invalidate('ui.render')
@@ -900,25 +901,18 @@ export const register: Register = (on, options) => {
       )
     }))
 
-    const boardRows = await Promise.all((snap?.board ?? []).map(async c => {
-      const w = who(c.by)
-      return (
-        <Box key={`b-${c.target}`} flexDirection="row" gap={1} alignItems="center">
-          {await avatar($, Svg, Text, w.shape, w.hex, 20)}
-          <Box flexDirection="column" flexShrink={1}>
-            <Text bold>{c.target.split(/[\\/]/).pop()}</Text>
-            <Text color={muted}>{w.label} · {c.since.slice(11, 16)}{c.note ? ` · ${c.note}` : ''}</Text>
-          </Box>
-        </Box>
-      )
-    }))
+    // 세션이 고치는 중인 파일(claim)은 패널에 보이지 않는다. 다른 세션의 수정만 막는 세션끼리의 표시라 사용자가 판단할 정보가 아니고,
+    // 탭으로 보였더니 "그 세션을 못 쓴다"로 읽혔다. 답이 늦는 것은 스레드의 "답 기다림"이 이미 보여 준다(2026-11-02 사용자 결정)
 
     const count = Object.keys(sessions).length
     const others = count - (mine ? 1 : 0)
-    const tab = await read($, view)
-    // 탭 버튼은 글자만 바뀌므로, 고른 탭은 앞에 ▸를 붙여 구분한다
+    // 없앤 탭(board)이 저장돼 있으면 빈 화면이 되므로 스레드 탭으로 돌린다
+    const saved = await read($, view)
+    const tab = saved === 'sessions' ? 'sessions' : 'threads'
+    // 고른 탭은 화면이 강조하는 버튼 모양(primary)으로 그린다: 데스크톱은 앱의 강조 버튼, 터미널은 강조 색 [ ]. 나머지는 터미널에서 흐리게 둔다.
+    // 앞에 ▸를 붙여 구분하던 것은 같은 모양의 버튼 셋 중 고른 것이 잘 안 보여 바꿨다(2026-11-02 사용자 요청)
     const tabButton = (v: string, label: string) => (
-      <Button key={`tab-${v}`} onPress={() => void pickView($, v)}>{tab === v ? `▸ ${label}` : label}</Button>
+      <Button key={`tab-${v}`} variant={tab === v ? 'primary' : undefined} dimColor={term && tab !== v ? true : undefined} onPress={() => void pickView($, v)}>{label}</Button>
     )
     return (
       <Box flexDirection="column" padding={1}>
@@ -935,7 +929,6 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row" gap={1} marginTop={1} flexWrap="wrap">
           {tabButton('threads', `${L('스레드', 'Threads')} ${openCount}`)}
           {tabButton('sessions', `${L('다른 세션', 'Other sessions')} ${others}`)}
-          {tabButton('board', `${L('맡은 일', 'Claims')} ${boardRows.length}`)}
         </Box>
 
         {tab === 'threads' && (
@@ -957,11 +950,6 @@ export const register: Register = (on, options) => {
             <Text color={muted}>{L('지금 열려 있는 다른 세션이 없습니다', 'No other sessions are open')}</Text>
           </Box>
         ))}
-        {tab === 'board' && (
-          <Box flexDirection="column" gap={1} marginTop={1}>
-            {boardRows.length ? boardRows : <Text color={muted}>{L('맡은 일이 없습니다', 'Nothing is claimed')}</Text>}
-          </Box>
-        )}
       </Box>
     )
   })

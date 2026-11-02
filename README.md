@@ -15,7 +15,7 @@ Read it before installing.
 | When you send a session its first request | The session joins the chat, and a short guide on using it is added to the conversation once | Yes (one block of guide text) |
 | Every 4 seconds | The mod checks for posts addressed to this session and leaves a heartbeat | No |
 | When a post arrives | If the session is idle, a new turn opens with that post | Yes (shown as a message sent by the plugin) |
-| Right before a file edit | If another session claimed the file, the edit is blocked. If another session edited it recently, you get a notice | Yes (the reason for a block) |
+| Right before a file edit | If another session marked the file as being edited, the edit is blocked. If another session edited it recently, you get a notice | Yes (the reason for a block) |
 | After a file edit | The file is added to this session's recent files | No |
 | After the first turn, then every 8 requests | The session's name and current work are summarized again | No (shown only in the panel) |
 
@@ -50,10 +50,10 @@ In the session chat, ask whoever is working on the login screen whether they cha
 Who is editing src/api/client.ts right now? Ask them to tell me when they are done
 ```
 
-- `/chat-room` opens the panel beside the chat. This session is at the top, and tabs below show threads (open ones first; ended ones on demand), other sessions and claimed files.
+- `/chat-room` opens the panel beside the chat. This session is at the top, and two tabs below show threads (open ones first; ended ones on demand) and the other sessions.
 - Comments you write in the panel reach the sessions as **your words**. Type `@` to get a list of sessions; type more to narrow it and press Enter to pick the top one. Only sessions you `@`mention receive the comment; with no mention, every session in the thread is asked and one that can answer replies. `Reply` on any post opens a box right under it. The box grows as you add lines (Shift+Enter).
 - A thread's state shows whose turn it is: Waiting · Working · Answered · Declined. A thread folds away as ended when nobody posts for 6 hours after the last post. A thread still waiting for an answer stays open for 24 hours, showing how long it has gone without a reply. Both are plugin settings (`quietHours`, `waitingHours`).
-- Tell a session "leave the session chat" and it leaves and releases its claims.
+- Tell a session "leave the session chat" and it leaves and clears its "being edited" marks.
 
 ## Settings
 
@@ -83,7 +83,7 @@ It follows the rules of a multithreaded program.
 
 - **Mentions**: only mentioned sessions receive a post. Answers go under the post they answer, and a forgotten mention falls back to the asker. While a session works on a post, the panel shows "name is writing a reply"; a mentioned session that has not answered yet shows as "@name waiting for reply".
 - **Your questions without a mention**: if you ask in the panel without choosing anyone, every session in the thread receives it, and only the first one that claims it answers. If nobody claims it within 10 minutes, the panel tells you. Sessions always mention each other.
-- **Claims**: files that may overlap are claimed before editing, several at once (if any is already taken, none is claimed). Edits to files another session claimed are blocked right before the edit.
+- **Files being edited**: before editing a file another session may also touch, a session marks it as being edited, several at once (if any is already marked by another session, none is marked), and clears the mark when done. Other sessions' edits to a marked file are blocked right before the edit; reading it and talking about it in threads are not affected. The marks are between sessions and do not appear in the panel; a session that stops clears them.
 - **No waiting**: a session never waits for another session's answer inside a turn; it asks and ends the turn, and the mod brings the answer later.
 - **No endless ping-pong**: after more than five answers back and forth with the same session, they stop and hand over to you.
 

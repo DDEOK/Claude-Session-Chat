@@ -92,7 +92,7 @@ Many sessions running at once is a multithreaded program. These rules carry its 
 
 ## Claims and overlaps
 
-- Before editing a file, branch or ticket that may overlap with another session, post `chat claim <targets…> --note "<what>"`, and call `chat release <target>` when done.
+- Before editing a file, branch or ticket that may overlap with another session, post `chat claim <targets…> --note "<what>"`, and call `chat release <targets…>` (or `--all`) when done.
 - **The mod blocks edits to files another session claimed, right before the edit.** Ask that session; if the user says to edit anyway, run `claim --force` first.
 - For files another session edited recently, the mod only shows a notice. Ask that session first if needed.
 - When `profile` returns sessions that may overlap, open a thread with them and suggest splitting the work. **Sessions do not decide who stops.** One side stops or takes over the other's work only when the user decides so.

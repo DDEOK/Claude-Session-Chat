@@ -703,7 +703,9 @@ def cmd_release(a):
     me = _me(a)
     with _Lock():
         board = _load("board.json", {})
-        gone = [t for t, c in board.items() if c["by"] == me and (a.target in ("--all", t) or os.path.abspath(a.target) == t)]
+        # --all은 옵션으로 받는다. 위치 인자 하나로 받던 때는 argparse가 --all을 모르는 옵션으로 보고 실패했다
+        wanted = {os.path.abspath(t) for t in a.targets} | set(a.targets)
+        gone = [t for t, c in board.items() if c["by"] == me and (a.all or t in wanted)]
         for t in gone:
             del board[t]
         _save("board.json", board)
@@ -802,7 +804,8 @@ def main():
     s.add_argument("--note")
     s.add_argument("--force", action="store_true", help="Take over a claim held by another live session (only when the user decided so)")
     s = sub.add_parser("release", help="Release claims (--all for every one)")
-    s.add_argument("target")
+    s.add_argument("targets", nargs="*")
+    s.add_argument("--all", action="store_true")
     sub.add_parser("leave", help="Leave the session chat")
     s = sub.add_parser("touch", help="For the mod: record an edited file as recent")
     s.add_argument("path")

@@ -224,6 +224,20 @@ class SessionChatTest(unittest.TestCase):
         board = json.loads(self.run_chat("bbbb0002", "dump").stdout)["board"]
         self.assertEqual([c["by"] for c in board], ["aaaa0001"])
 
+    def test_release_several_and_all(self):
+        self.join("aaaa0001", "맡는 세션")
+        other = os.path.join(self.work, "other.md")
+        third = os.path.join(self.work, "third.md")
+        for p in (other, third):
+            open(p, "w").close()
+        self.run_chat("aaaa0001", "claim", self.file, other, third)
+        self.run_chat("aaaa0001", "release", self.file, other)
+        board = json.loads(self.run_chat("aaaa0001", "dump").stdout)["board"]
+        self.assertEqual([c["target"] for c in board], [os.path.abspath(third)])
+        # --all은 옵션이다. 위치 인자로 받던 때는 argparse가 실패했다
+        self.run_chat("aaaa0001", "release", "--all")
+        self.assertEqual(json.loads(self.run_chat("aaaa0001", "dump").stdout)["board"], [])
+
     def test_yield_clears_busy_when_turn_ends_without_answer(self):
         self.join("aaaa0001", "묻는 세션")
         self.join("bbbb0002", "답하는 세션")
