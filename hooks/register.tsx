@@ -33,8 +33,8 @@ const REPLY_LABEL = (): Record<string, string> => ({ answered: L('완료', 'done
 const KIND = (): Record<string, string> => ({ ask: L('질문', 'Question'), request: L('작업 요청', 'Request'), info: L('알림', 'Notice'), reply: L('답변', 'Reply'), comment: L('의견', 'Comment') })
 // 이름이 아직 없는 세션을 가리키는 말. 이름은 첫 작업을 받은 뒤 정해진다
 const PENDING_NAME = () => L('준비 중', 'Getting ready')
-// 답을 쓰는 중 표시. Svg를 isInteractive로 그리면 SMIL 애니메이션이 돈다(스크립트는 없다)
-const SPINNER = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#999" stroke-opacity="0.3" stroke-width="3"/><path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="#5B5BD6" stroke-width="3" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite"/></path></svg>'
+// 답을 쓰는 중 표시는 avatars/spinner.svg다. Svg를 isInteractive로 그리면 SMIL 애니메이션이 돈다(스크립트는 없다).
+// 코드 안에 SVG를 두었더니 그 안의 이름공간 주소를 디렉터리 검사가 원격 주소로 보아 파일로 뺐다(2026-11-02)
 const USER_AVATAR = { shape: 'user', hex: '#3D3A36' }
 // 사람 요청 몇 번마다 이름·하는 일을 다시 요약한다. 이름이 없으면 첫 턴이 끝날 때 바로 한다
 const SUMMARY_EVERY = 8
@@ -155,7 +155,8 @@ async function userKey($: any) {
     hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')
     await $.store.set('userKey', hex)
   }
-  return new Uint8Array(hex.match(/../g)!.map(h => parseInt(h, 16)))
+  // JSX가 요소를 h(...) 호출로 바꾸므로 이 파일에서는 h를 변수 이름으로 쓰지 않는다(디렉터리 검사가 막는다, 2026-11-02)
+  return new Uint8Array(hex.match(/../g)!.map(pair => parseInt(pair, 16)))
 }
 
 // 모드 환경에는 crypto.subtle의 키 가져오기가 없어서(2026-11-02 실측) HMAC-SHA256을 직접 계산한다
@@ -174,7 +175,7 @@ function sha256(data: Uint8Array) {
   const view = new DataView(padded.buffer)
   view.setUint32(padded.length - 4, len * 8)
   view.setUint32(padded.length - 8, Math.floor(len / 0x20000000))
-  const h = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19])
+  const hs = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19])
   const w = new Uint32Array(64)
   const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n))
   for (let off = 0; off < padded.length; off += 64) {
@@ -184,17 +185,17 @@ function sha256(data: Uint8Array) {
       const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10)
       w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0
     }
-    let [a, b, c, d, e, f, g, hh] = h
+    let [a, b, c, d, e, f, g, hh] = hs
     for (let i = 0; i < 64; i++) {
       const t1 = (hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K256[i] + w[i]) >>> 0
       const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0
       hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0
     }
-    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh
+    hs[0] += a; hs[1] += b; hs[2] += c; hs[3] += d; hs[4] += e; hs[5] += f; hs[6] += g; hs[7] += hh
   }
   const out = new Uint8Array(32)
   const ov = new DataView(out.buffer)
-  for (let i = 0; i < 8; i++) ov.setUint32(i * 4, h[i])
+  for (let i = 0; i < 8; i++) ov.setUint32(i * 4, hs[i])
   return out
 }
 
@@ -303,6 +304,7 @@ async function start($: any) {
   const out = await chat($, ['paths'])
   if (out.exitCode === 0) root = JSON.parse(out.stdout).root
   pluginVersion = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).then((s: string) => JSON.parse(s).version ?? '').catch(() => '')
+  svgCache.set('spinner', await $.fs.read(`${$.plugin.root}/avatars/spinner.svg`).catch(() => ''))
   log('start', { plugin: $.plugin.root, version: pluginVersion, quietHours, waitingHours })
   ticker?.cancel()
   ticker = $.clock.every(TICK_MS, () => void tick($))
@@ -933,7 +935,7 @@ export const register: Register = (on, options) => {
     }
     const spinner = (key: string, label: string) => (
       <Box key={key} flexDirection="row" gap={1} alignItems="center" marginTop={1}>
-        {Svg ? <Svg source={SPINNER} alt={L('답을 쓰는 중', 'Writing a reply')} width={14} height={14} isInteractive /> : <Text color="suggestion">⋯</Text>}
+        {Svg && svgCache.get('spinner') ? <Svg source={svgCache.get('spinner')} alt={L('답을 쓰는 중', 'Writing a reply')} width={14} height={14} isInteractive /> : <Text color="suggestion">⋯</Text>}
         <Text color="suggestion">{label}</Text>
       </Box>
     )
