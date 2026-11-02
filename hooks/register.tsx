@@ -57,6 +57,8 @@ let root = ''
 let pluginVersion = ''
 let quietHours = 6
 let waitingHours = 24
+// 마지막 글 뒤 이만큼(일) 지난 스레드는 보관 파일로 옮긴다(0이면 그대로 둔다)
+let archiveDays = 7
 // 화면 문구의 언어. 플러그인 설정 language(auto·ko·en)를 먼저 보고, auto면 Claude Code 설정의 language, 그다음 시스템 언어(LANG)로 정한다.
 // 세션이 읽는 안내·지시는 영어로 두고, 이름·하는 일·글은 사용자의 언어로 쓰게 한다
 let langPref = 'auto'
@@ -262,7 +264,7 @@ function summarizeResult(r: any) {
 async function tick($: any) {
   try {
     if (active) {
-      const out = await chat($, ['poll'])
+      const out = await chat($, ['poll', '--archive-days', String(archiveDays)])
       if (out.exitCode === 0) {
         const msgs = JSON.parse(out.stdout || '[]') as Post[]
         if (msgs.length) {
@@ -462,6 +464,16 @@ async function pickView($: any, v: string) {
 }
 
 
+// 긴 스레드에서 펼쳐 보일 최근 글 수와, 이전 글까지 펼쳐 둔 스레드
+const RECENT_POSTS = 10
+const showEarlier = new Set<string>()
+
+function toggleEarlier($: any, thread: string) {
+  if (showEarlier.has(thread)) showEarlier.delete(thread)
+  else showEarlier.add(thread)
+  $.ui.invalidate('ui.render')
+}
+
 // 스레드마다 참여 세션 이름을 펼쳐 둔 것
 const showNames = new Set<string>()
 
@@ -567,7 +579,8 @@ function guide($: any) {
     '- Always give --status on a reply: answered when the request is done, partial while still working, declined when you will not do it.',
     '- Write names, current work and posts in the language the user uses with you.',
     "- Posts to other sessions are terse: only the facts and the ask, no greeting, no thanks, no self-introduction (the panel already shows who wrote it), no honorific padding; in Korean use the plain 평서체 (~다). Replies to the user (--to user) stay polite.",
-    '- Detailed rules are in the session-chat skill.',
+    '- Each post costs every receiver a full turn. Use the chat when another session already holds what you need or a file or resource must be shared; skip it for what you can check yourself, progress chatter and acknowledgements.',
+    '- Detailed rules and when to use it are in the session-chat skill ("Using it well").',
     '',
     // 한 줄 안내로 두었더니 세션이 건너뛰는 일이 있어서(2026-11-02), 사용자 요청을 처리하기 전에 할 일로 순서를 매긴다
     "## Before the user's request this turn (once)",
@@ -622,6 +635,7 @@ export const register: Register = (on, options) => {
   debugLog = (opts as { debugLog?: boolean }).debugLog === true
   quietHours = Number(opts.quietHours) > 0 ? Number(opts.quietHours) : 6
   waitingHours = Number(opts.waitingHours) > 0 ? Number(opts.waitingHours) : 24
+  archiveDays = Number.isFinite(Number((opts as { archiveDays?: number }).archiveDays)) ? Number((opts as { archiveDays?: number }).archiveDays) : 7
   on('session.start', async ($, e, next) => {
     // 스킬 이름(session-chat)과 겹치면 스킬이 불려 패널이 안 열리므로 명령은 다른 이름을 쓴다
     await detectLanguage($)
@@ -781,12 +795,16 @@ export const register: Register = (on, options) => {
       </Box>
     )
     const conversation = async (t: Thread, inlineComposer: (t: Thread, inline?: boolean) => any) => {
-      const all = [t.root, ...t.posts]
+      // 글이 많으면 첫 글과 최근 RECENT_POSTS개만 그리고, 그 사이는 "이전 글 N개 보기"로 접는다. 카드가 한없이 길어지지 않게 하려는 것이다(2026-11-02 사용자 결정).
+      // 숨긴 글에 단 답글은 첫 글 아래로 올라간다(부모를 못 찾은 답글과 같다)
+      const hidden = showEarlier.has(t.id) ? 0 : Math.max(0, t.posts.length - RECENT_POSTS)
+      const posts = t.posts.slice(hidden)
+      const all = [t.root, ...posts]
       const ids = new Set(all.map(p => p.id))
       const children = new Map<string, Post[]>()
       // 새 글(top)은 누구의 답글도 아니라 첫 글과 같은 단계에 올라온 순서대로 선다
       const tops: Post[] = [t.root]
-      for (const p of t.posts) {
+      for (const p of posts) {
         if (p.top) {
           tops.push(p)
           continue
@@ -816,7 +834,15 @@ export const register: Register = (on, options) => {
         for (const c of children.get(p.id) ?? []) await walk(c, depth + 1)
       }
       for (const p of tops) await walk(p, 0)
-      return out
+      // 첫 글 바로 뒤에 접은 글 수와 펼치기 버튼을 둔다
+      const earlier = t.posts.length > RECENT_POSTS && (
+        <Box key={`earlier-${t.id}`} marginTop={1}>
+          <Button key={`earlier-b-${t.id}`} dimColor={term ? undefined : true} onPress={() => toggleEarlier($, t.id)}>
+            {showEarlier.has(t.id) ? L('이전 글 접기', 'Hide earlier posts') : L(`이전 글 ${hidden}개 보기`, `Show ${hidden} earlier posts`)}
+          </Button>
+        </Box>
+      )
+      return earlier ? [out[0], earlier, ...out.slice(1)] : out
     }
     // 입력창 묶음: 답글 대상 표시 · 입력창(폭을 꽉 채우고 줄을 바꾸면 8줄까지 커진다) · @ 자동 완성 목록 · 누구에게 가는지 안내
     // inline: 글 아래에 연 답글 입력창. 위 여백은 가로선이 대신하므로 뺀다.

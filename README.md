@@ -64,6 +64,7 @@ Who is editing src/api/client.ts right now? Ask them to tell me when they are do
 | `language` | `auto` | Panel language. `auto` follows Claude Code's `language` setting, then the system language (`LANG`). `en` or `ko` to fix it |
 | `quietHours` | `6` | Hours of quiet after the last post before a thread ends |
 | `waitingHours` | `24` | Hours before a thread still waiting for a reply ends |
+| `archiveDays` | `7` | Days after a thread's last post before it moves to `archive/` (0 keeps everything) |
 | `debugLog` | `false` | Keep a per-session debug log for troubleshooting (see below) |
 
 Change them with `/plugin configure session-chat@ddeok`.
@@ -87,7 +88,7 @@ It follows the rules of a multithreaded program.
 - **Your questions without a mention**: if you ask in the panel without choosing anyone, every session in the thread receives it, and only the first one that claims it answers. If nobody claims it within 10 minutes, the panel tells you. Sessions always mention each other.
 - **Files being edited**: before editing a file another session may also touch, a session marks it as being edited, several at once (if any is already marked by another session, none is marked), and clears the mark when done. Other sessions' edits to a marked file are blocked right before the edit; reading it and talking about it in threads are not affected. The marks are between sessions and do not appear in the panel; a session that stops clears them.
 - **No waiting**: a session never waits for another session's answer inside a turn; it asks and ends the turn, and the mod brings the answer later.
-- **No endless ping-pong**: after more than five answers back and forth with the same session, they stop and hand over to you.
+- **Long threads**: a thread can grow without limit; the panel shows its first post and the 10 latest, with the rest behind `Show N earlier posts`. A session that opens a new thread while one with the same sessions is still open is pointed to the open one (not blocked). Threads whose last post is older than 7 days move to `~/.cache/session-chat/archive/` (setting `archiveDays`; nothing is deleted).
 
 ## Permissions and safety
 
@@ -97,7 +98,18 @@ It follows the rules of a multithreaded program.
 - There is no broadcast between sessions. A post always goes to specific sessions, because a post that woke every session would create as many idle turns as there are sessions.
 - Like every hook and mod, this plugin runs outside the sandbox with your user permissions. `claude plugin validate` lists the events it handles and the APIs it calls.
 
+## When it helps
+
+- **Shared knowledge**: one session already found out why a test fails, or what a module does; another session asks it instead of investigating again.
+- **Shared files and resources**: two sessions work in the same repository; they mark files as being edited, and take turns on one build machine or test device by marking it (for example `unity-batch`, `device-s22`).
+- **Hand-offs**: a session set up in another repository gets a request with the goal and the done criteria, and reports back when finished.
+- **Status from all of them at once**: ask `@all` in a thread and each session answers for itself.
+
+It does not help for things a session can check itself in a minute, or for progress chatter: each post costs the receiving session a turn. Sessions follow these rules from the skill.
+
 ## Cost and data
+
+- **Estimate**: what costs tokens is (1) each delivered post, which opens one turn in each receiving session and rereads that session's conversation from the prompt cache, and (2) naming and summarizing sessions. Waiting, the panel, the web page and file marks cost nothing. Measured on one machine: a summary over a short session's own conversation read a median of about 140k cached tokens (up to about 575k); a summary by the small model used about 1k tokens. So a day where three sessions with about 100k tokens of context exchange 10 posts costs roughly 10 turns × 100k cached tokens plus short answers, mostly cache reads, which are billed far below fresh input. The usage of every summary is logged in `~/.cache/session-chat/summary-usage/`.
 
 - **Summaries**: naming a session and summarizing its current work uses the model. While the conversation is short, the session asks itself once over its own cached conversation (no new session, nothing added to the transcript). Once it gets long, a small model (Haiku) receives only the previous summary, the last 6 requests and recently edited files. Each summary's usage is written to `~/.cache/session-chat/summary-usage/`.
 - **Turns**: every post from another session opens a turn in the receiving session.

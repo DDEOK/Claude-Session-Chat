@@ -419,6 +419,11 @@ def cmd_post(a):
                 sys.exit(f"{a.kind} needs --reply-to <post id>.")
             if not a.title:
                 sys.exit("A new thread needs --title: a name that tells the user what it is about.")
+            # 같은 상대와 열린 스레드가 있으면 알려 준다. 막지는 않는다(주제가 다를 수 있다). 짧은 스레드가 상대마다 계속 새로 생기는 것을 줄이려는 것이다(2026-11-02 사용자 결정)
+            if me != USER:
+                same = [s for s in _thread_states().values() if not s["closed"] and me in s["participants"] and all(x in s["participants"] for x in to)]
+                for s in same[:3]:
+                    print(f"Note: thread '{s['title']}' ({s['id']}) is still open with the same sessions. If this is the same topic, post there with --reply-to {s['root']['id']} instead of a new thread.", file=sys.stderr)
             msg["thread"] = msg["id"]
             t = threads[msg["id"]] = {"title": a.title, "by": me, "participants": [], "created": msg["ts"]}
         for pid in [me, *to]:
@@ -494,6 +499,88 @@ def _take(sid):
     return mine
 
 
+ARCHIVE_EVERY = 3600
+
+
+def _archive(days, force=False):
+    """마지막 글이 days일보다 오래된 스레드를 보관 파일(archive/<월>.jsonl)로 옮긴다. 지우지 않는다.
+
+    글 기록은 덧붙이기만 해서 계속 커지고, 패널·세션이 매번 처음부터 읽어 오래 쓰면 느려진다(2026-11-02 사용자 결정).
+    읽은 위치(커서)는 파일 안의 바이트 위치라, 남는 줄의 바이트만 세어 새 위치로 옮긴다. 한 시간에 한 번만 돈다.
+    잠금 안에서 부른다.
+    """
+    stamp = _path("archive", ".stamp")
+    if not force and os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) < ARCHIVE_EVERY:
+        return 0
+    with open(stamp, "w", encoding="utf-8") as f:
+        f.write(_now())
+    log = _path("log.jsonl")
+    if days <= 0 or not os.path.exists(log):
+        return 0
+    with open(log, "rb") as f:
+        lines = f.readlines()
+    last = {}
+    for raw in lines:
+        try:
+            m = json.loads(raw)
+            last[m["thread"]] = max(last.get(m["thread"], ""), m["ts"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+    cutoff = time.time() - days * 86400
+    old = set()
+    for tid, ts in last.items():
+        try:
+            if datetime.datetime.fromisoformat(ts).timestamp() < cutoff:
+                old.add(tid)
+        except ValueError:
+            continue
+    if not old:
+        return 0
+    keep, moved, bounds, pos, kept_bytes = [], {}, [], 0, 0
+    for raw in lines:
+        try:
+            m = json.loads(raw) if raw.endswith(b"\n") else None
+        except json.JSONDecodeError:
+            m = None
+        pos += len(raw)
+        if m is not None and m.get("thread") in old:
+            moved.setdefault(m["ts"][:7], []).append(raw)
+        else:
+            keep.append(raw)
+            kept_bytes += len(raw)
+        bounds.append((pos, kept_bytes))
+    for month, rows in moved.items():
+        with open(_path("archive", f"{month}.jsonl"), "ab") as f:
+            f.writelines(rows)
+    threads = _load("threads.json", {})
+    archived = _load(os.path.join("archive", "threads.json"), {})
+    for tid in old:
+        if tid in threads:
+            archived[tid] = threads.pop(tid)
+    _save(os.path.join("archive", "threads.json"), archived)
+    _save("threads.json", threads)
+    takes = _load("takes.json", {})
+    moved_ids = {json.loads(r)["id"] for rows in moved.values() for r in rows}
+    _save("takes.json", {k: v for k, v in takes.items() if k not in moved_ids})
+    tmp = _path("log.jsonl.tmp")
+    with open(tmp, "wb") as f:
+        f.writelines(keep)
+    # 커서마다 "그 위치 앞에 끝난 줄 중 남은 줄의 바이트 합"이 새 위치다
+    cdir = os.path.join(ROOT, "cursors")
+    for name in os.listdir(cdir) if os.path.isdir(cdir) else []:
+        c = _cursor(name)
+        if c is None:
+            continue
+        new = 0
+        for end, kept in bounds:
+            if end > c:
+                break
+            new = kept
+        _set_cursor(name, new)
+    os.replace(tmp, log)
+    return len(old)
+
+
 def _decorate(msgs):
     sessions = _load("sessions.json", {})
     threads = _load("threads.json", {})
@@ -526,6 +613,7 @@ def cmd_poll(a):
         return
     _beat(sid)
     with _Lock():
+        _archive(a.archive_days)
         got = _take(sid)
         if got:
             threads = _load("threads.json", {})
@@ -941,7 +1029,8 @@ def main():
     s.add_argument("path")
     s = sub.add_parser("check", help="For the mod: check for overlaps before editing a file")
     s.add_argument("path")
-    sub.add_parser("poll", help="For the mod: heartbeat and new posts")
+    s = sub.add_parser("poll", help="For the mod: heartbeat and new posts")
+    s.add_argument("--archive-days", type=float, default=7, help="Move threads whose last post is older than this many days to archive/ (0 keeps everything)")
     sub.add_parser("activity", help="For the mod: record that a user prompt or turn happened")
     sub.add_parser("yield", help="For the mod: clear working marks when a turn ends")
     s = sub.add_parser("take", help="Claim an open user question. Only one session succeeds per question")

@@ -86,6 +86,7 @@ const T = {
     openQ: 'Question without a mention: waiting for a session that can answer', none: 'No threads yet', noneOpen: 'No open threads',
     noOthers: 'No other sessions are open', showEnded: n => `Show ${n} ended threads`, hideEnded: 'Hide ended threads',
     expand: 'Expand', collapse: 'Collapse', showNames: '≡ Names', hideNames: '≡ Hide names',
+    showEarlier: n => `Show ${n} earlier posts`, hideEarlier: 'Hide earlier posts',
     noFolder: 'Sessions without a folder', unknown: 'Unknown location',
     note: 'Read-only view. Comments are written in the /chat-room panel. Refreshes every few seconds.', fail: 'The page server has stopped. Press "Open in browser" in the panel again.' },
   ko: { title: '세션 대화방', sessions: n => `세션 ${n}`, open: n => `열린 스레드 ${n}`, threads: '스레드', others: '다른 세션',
@@ -97,11 +98,12 @@ const T = {
     openQ: '멘션 없는 질문: 답할 수 있는 세션을 기다리는 중', none: '아직 스레드가 없습니다', noneOpen: '열린 스레드가 없습니다',
     noOthers: '지금 열려 있는 다른 세션이 없습니다', showEnded: n => `끝난 스레드 ${n}개 보기`, hideEnded: '끝난 스레드 숨기기',
     expand: '펼치기', collapse: '접기', showNames: '≡ 이름', hideNames: '≡ 이름 숨기기',
+    showEarlier: n => `이전 글 ${n}개 보기`, hideEarlier: '이전 글 접기',
     noFolder: '폴더 없이 연 세션', unknown: '위치 모름',
     note: '보기 전용 페이지입니다. 의견은 /chat-room 패널에서 씁니다. 몇 초마다 새로 고칩니다.', fail: '페이지 서버가 꺼졌습니다. 패널의 「브라우저로 보기」를 다시 누르세요.' },
 }
 const STATE_COLOR = { waiting: 'warning', working: 'link', answered: 'success', declined: 'error', info: 'muted' }
-let ui = { tab: 'threads', open: new Set(), names: new Set(), showEnded: false }
+let ui = { tab: 'threads', open: new Set(), names: new Set(), earlier: new Set(), showEnded: false }
 let snap = null
 let t = T.en
 
@@ -133,21 +135,29 @@ function message(p, depth) {
   const to = p.open ? t.everyone : p.to.map(x => '@' + who(x).label).join(' ')
   return `<div class="post">${avatar(w, depth ? 'sm' : '')}<div class="body"><div class="meta"><b style="color:var(--text)">${esc(w.label)}</b> ${esc(p.ts.slice(11, 16))} · ${esc(tag)} · <span class="to">${esc(to)}</span></div>${esc(p.text)}</div></div>`
 }
+// 패널처럼 첫 글과 최근 10개만 그리고 그 사이는 "이전 글 N개 보기"로 접는다
+const RECENT_POSTS = 10
 function conversation(th) {
-  const all = [th.root, ...th.posts]
+  const hidden = ui.earlier.has(th.id) ? 0 : Math.max(0, th.posts.length - RECENT_POSTS)
+  const posts = th.posts.slice(hidden)
+  const all = [th.root, ...posts]
   const ids = new Set(all.map(p => p.id))
   const children = new Map()
   const tops = [th.root]
-  for (const p of th.posts) {
+  for (const p of posts) {
     if (p.top) { tops.push(p); continue }
     const parent = p.reply_to && ids.has(p.reply_to) ? p.reply_to : th.root.id
     children.set(parent, [...(children.get(parent) || []), p])
   }
   let out = ''
   let n = 0
+  const earlier = th.posts.length > RECENT_POSTS
+    ? `<div><button class="more" data-earlier="${esc(th.id)}">${esc(ui.earlier.has(th.id) ? t.hideEarlier : t.showEarlier(hidden))}</button></div>`
+    : ''
   const walk = (p, depth) => {
     if (depth === 0 && n++ > 0) out += '<hr>'
     out += depth === 0 ? message(p, 0) : `<div class="reply" style="margin-left:${Math.min(depth, 4) * 20}px">${message(p, depth)}</div>`
+    if (p === th.root) out += earlier
     for (const c of children.get(p.id) || []) walk(c, depth + 1)
   }
   for (const p of tops) walk(p, 0)
@@ -219,6 +229,8 @@ function render() {
 document.addEventListener('click', e => {
   const tab = e.target.closest('[data-tab]')
   if (tab) { ui.tab = tab.dataset.tab; render(); return }
+  const er = e.target.closest('[data-earlier]')
+  if (er) { const id = er.dataset.earlier; ui.earlier.has(id) ? ui.earlier.delete(id) : ui.earlier.add(id); render(); return }
   const nm = e.target.closest('[data-names]')
   if (nm) { const id = nm.dataset.names; ui.names.has(id) ? ui.names.delete(id) : ui.names.add(id); render(); return }
   const head = e.target.closest('[data-thread]')

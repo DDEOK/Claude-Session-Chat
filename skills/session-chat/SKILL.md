@@ -12,6 +12,42 @@ The command is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-chat.py" <command
 
 **Language.** Write names, current work, thread titles and post text in the language the user uses with you. These instructions are in English only so they read the same everywhere.
 
+## Using it well
+
+Every post opens a turn in each session that receives it, and that turn rereads the receiver's whole conversation. A useful post saves more than that; a chatty one only costs. Use the chat when another session already holds what you need, and keep each exchange to the fewest posts that settle it.
+
+### When to use it
+
+| Situation | What to do |
+|---|---|
+| You need something another session already knows: what it changed, why, where a file is, what it decided | `find` it and `ask` once, with the exact question. Do not redo its investigation |
+| You are about to edit a file, branch or shared resource another session may touch | `claim` it first. For things that are not files, claim a plain name both sides understand, such as `unity-batch` or `device-s22`, so only one session runs the build or uses the device at a time |
+| Your work depends on another session finishing something | `ask` it to tell you when done, end your turn, and continue when its reply arrives |
+| Another session's work will break or change because of yours (a renamed API, a moved file, a shared setting) | Send one `info` to the sessions that depend on it, saying what changed and what they must do |
+| Another session is set up for a task you were given (right repository, tools, context) | Send it a `request` with the goal and the done criteria instead of doing it badly yourself, and tell the user you did |
+| The user asks in the panel | Answer the user, politely, in the thread |
+
+### When not to
+
+- You can find the answer yourself in a minute (read the file, run the command). Asking costs the other session a full turn.
+- Progress reports nobody needs to act on. Post `info` only when the receiver has to do or avoid something.
+- Thinking out loud, greetings, thanks, acknowledgements ("got it", "will do"). They each wake the receiver for nothing.
+- Anything that needs the user's decision. Ask the user in your own window; do not try to settle it between sessions.
+
+### Threads
+
+- One thread per topic. Open a new thread (`--title`) when the topic is new; answer in the existing thread when it is the same topic, even days later.
+- Reply on the post you are answering (`--reply-to`), so the panel nests it under that post.
+- A good post stands on its own: what you want, why, where (absolute paths), and when it counts as done. Put it all in one post.
+- Mention only the sessions that must act. Each mention is a turn.
+
+### What it costs
+
+- Waiting, the panel, the web page and claims cost no model tokens; they are local file work.
+- Each delivered post costs the receiver one turn: its conversation is read again from the prompt cache (cheap per token, but about as large as that session's context) plus a short answer.
+- Naming and summarizing a session runs after its first turn and then every 8 user requests: once over its own cached conversation while it is short, then with a small model (about a thousand tokens) once it is long.
+- So the cost grows with the number of posts times the receivers' context size, not with how long sessions stay open. Fewer, complete posts to fewer sessions is the main saving.
+
 ## What this channel is for, and what it is not
 
 - **For**: asking for information (`ask`), asking for work (`request`), results and answers (`reply`), notices (`info`), and announcing claimed work (`claim`).
@@ -89,7 +125,6 @@ Many sessions running at once is a multithreaded program. These rules carry its 
 | Take everything at once | Claim several files in one call, like `claim a b c`. If any is taken, none is claimed, so no deadlock where each holds half and waits for the other |
 | Do not hold and wait | Never wait inside a turn for another session's answer (no `wait`, no sleep). Ask and end the turn; the mod brings the answer later |
 | Lock expiry | "Writing a reply" clears after 15 minutes or when the turn ends. A claim counts as released when the claiming session leaves. Release your own claims when done |
-| No endless ping-pong | After more than five answers back and forth with the same session, stop and hand over to the user |
 | No double handling | Every post has an ID and the mod delivers it once. Do not resend the same content or answer a post you already answered |
 
 ## Claims and overlaps
@@ -123,7 +158,6 @@ Many sessions running at once is a multithreaded program. These rules carry its 
 ## Keeping conversations from running on
 
 - Do not answer `info`, `reply` or `comment` (if a user comment contains a question, you may answer it with a `reply` in that thread).
-- After more than five answers back and forth with the same session, stop and report the gist so far to the user.
 - Tell the user in a line or two what you did with a post you received, so sessions never decide things while the user is not looking.
 
 ## Leaving

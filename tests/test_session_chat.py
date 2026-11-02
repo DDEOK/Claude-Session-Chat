@@ -290,6 +290,44 @@ class SessionChatTest(unittest.TestCase):
         # 번호는 남기고 표식은 지운다
         self.assertEqual(web, {"port": port})
 
+    def test_new_thread_with_same_sessions_points_to_open_one(self):
+        self.join("aaaa0001", "묻는 세션")
+        self.join("bbbb0002", "답하는 세션")
+        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--kind", "ask", "--title", "첫 주제", "질문 하나")
+        r = self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--kind", "ask", "--title", "둘째 주제", "질문 둘")
+        # 막지는 않고, 열린 스레드를 알려 준다
+        self.assertIn("첫 주제", r.stderr)
+        self.assertEqual(len(json.load(open(os.path.join(self.home.name, ".cache", "session-chat", "threads.json"), encoding="utf-8"))), 2)
+
+    def test_archive_moves_old_threads_and_keeps_cursors(self):
+        import datetime
+
+        self.join("aaaa0001", "보내는 세션")
+        self.join("bbbb0002", "받는 세션")
+        self.run_chat("bbbb0002", "poll")
+        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--kind", "ask", "--title", "옛 스레드", "옛 질문")
+        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--kind", "ask", "--title", "새 스레드", "새 질문")
+        root = os.path.join(self.home.name, ".cache", "session-chat")
+        log = os.path.join(root, "log.jsonl")
+        rows = [json.loads(line) for line in open(log, encoding="utf-8")]
+        # 첫 스레드의 글을 열흘 전 것으로 바꾼다
+        old_ts = (datetime.datetime.now().astimezone() - datetime.timedelta(days=10)).isoformat(timespec="seconds")
+        rows[0]["ts"] = old_ts
+        with open(log, "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+        # 정리는 한 시간에 한 번만 돈다. 앞선 poll이 남긴 표식을 지워 이번에 돌게 한다
+        os.remove(os.path.join(root, "archive", ".stamp"))
+        got = json.loads(self.run_chat("bbbb0002", "poll", "--archive-days", "7").stdout)
+        # 옛 스레드는 보관 파일로 가고, 받는 세션은 남은 새 글을 그대로 받는다
+        self.assertEqual([m["text"] for m in got], ["새 질문"])
+        self.assertEqual([json.loads(line)["text"] for line in open(log, encoding="utf-8")], ["새 질문"])
+        archived = open(os.path.join(root, "archive", f"{old_ts[:7]}.jsonl"), encoding="utf-8").read()
+        self.assertIn("옛 질문", archived)
+        threads = json.load(open(os.path.join(root, "threads.json"), encoding="utf-8"))
+        self.assertEqual([t["title"] for t in threads.values()], ["새 스레드"])
+        # 커서가 새 끝을 가리켜 다시 받지 않는다
+        self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
+
     def test_release_several_and_all(self):
         self.join("aaaa0001", "맡는 세션")
         other = os.path.join(self.work, "other.md")

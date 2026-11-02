@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.11.18",
+  "version": "0.13.0",
   "description": "Lets Claude Code sessions on the same machine ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
@@ -34,6 +34,12 @@
       "title": "Hours to keep an unanswered thread",
       "description": "A thread still waiting for a reply folds away only after this many hours",
       "default": 24
+    },
+    "archiveDays": {
+      "type": "number",
+      "title": "Days before a thread is archived",
+      "description": "Threads whose last post is older than this many days move from the chat log to ~/.cache/session-chat/archive/ (nothing is deleted). 0 keeps everything in the chat log",
+      "default": 7
     },
     "debugLog": {
       "type": "boolean",
