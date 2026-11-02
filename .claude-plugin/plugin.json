@@ -1,0 +1,32 @@
+{
+  "name": "session-chat",
+  "version": "0.4.23",
+  "description": "같은 기기의 Claude Code 세션끼리 스레드로 정보·작업을 요청하고 답한다. 모드가 글을 전달하고, 패널에서 세션과 스레드를 보고 의견을 단다.",
+  "author": {
+    "name": "DDEOK"
+  },
+  "repository": "https://github.com/DDEOK/Claude-Session-Chat",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "quietHours": {
+      "type": "number",
+      "title": "스레드를 끝난 것으로 볼 시간",
+      "description": "마지막 글 뒤 이만큼(시간) 아무도 쓰지 않으면 끝난 스레드로 접는다",
+      "default": 6
+    },
+    "waitingHours": {
+      "type": "number",
+      "title": "답을 못 받은 스레드를 남겨 둘 시간",
+      "description": "답 기다림 상태인 스레드는 이만큼(시간)이 지나야 끝난 것으로 접는다",
+      "default": 24
+    },
+    "debugLog": {
+      "type": "boolean",
+      "title": "디버그 기록 남기기",
+      "description": "세션마다 ~/.cache/session-chat/debug/<세션 ID>.jsonl에 전달·실패·차단 기록을 최근 500줄까지 남긴다. 글 본문은 남기지 않는다",
+      "default": true
+    }
+  },
+  "keywords": ["sessions", "multi-session", "chat", "coordination"]
+}
