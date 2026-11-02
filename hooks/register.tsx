@@ -36,7 +36,6 @@ const PENDING_NAME = () => L('준비 중', 'Getting ready')
 // 답을 쓰는 중 표시. Svg를 isInteractive로 그리면 SMIL 애니메이션이 돈다(스크립트는 없다)
 const SPINNER = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#999" stroke-opacity="0.3" stroke-width="3"/><path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="#5B5BD6" stroke-width="3" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite"/></path></svg>'
 const USER_AVATAR = { shape: 'user', hex: '#3D3A36' }
-const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit']
 // 사람 요청 몇 번마다 이름·하는 일을 다시 요약한다. 이름이 없으면 첫 턴이 끝날 때 바로 한다
 const SUMMARY_EVERY = 8
 // fork로 요약할 대화의 상한. 지난 fork가 이보다 많이 읽었거나 턴이 이보다 많으면 작은 모델로 요약한다
@@ -550,9 +549,15 @@ async function guardEdit($: any, e: any, next: any) {
   const path = e.file_path ?? e.notebook_path
   // 서브에이전트의 수정도 이 훅을 지난다(2026-11-02 확인). 그래서 서브에이전트도 남이 맡은 파일은 못 고친다
   if (!path || !sid) return next(e)
-  const out = await chat($, ['check', path])
-  const seen = out.exitCode === 0 ? JSON.parse(out.stdout) : { claimed: null, recent: [] }
-  if (out.exitCode !== 0) log('guard-check-failed', { path })
+  // 대화방은 돕는 기능이라, 검사가 실패해도 고치기를 막지 않고 그대로 통과시킨다
+  let seen = { claimed: null as any, recent: [] as any[] }
+  try {
+    const out = await chat($, ['check', path])
+    if (out.exitCode === 0) seen = JSON.parse(out.stdout)
+    else log('guard-check-failed', { path })
+  } catch (err) {
+    log('guard-check-failed', { path, error: String(err).slice(0, 300) })
+  }
   if (seen.claimed) {
     log('guard-deny', { path, by: seen.claimed.id, agentId: e.agentId ?? undefined })
     return {
@@ -561,7 +566,7 @@ async function guardEdit($: any, e: any, next: any) {
   }
   if (seen.recent.length) $.ui.notice(e.tool_use_id, `${L('최근 이 파일을 고친 세션', 'Sessions that recently edited this file')}: ${seen.recent.map((r: any) => r.title || r.id).join(', ')}`)
   const ran = await next(e)
-  if (!ran.deny && !ran.isError) await chat($, ['touch', path])
+  if (!ran.deny && !ran.isError) await chat($, ['touch', path]).catch(() => undefined)
   return ran
 }
 
@@ -657,11 +662,12 @@ export const register: Register = (on, options) => {
     return { text: L(`세션 대화방을 브라우저로 엽니다(보기 전용): ${url}`, `Opening the session chat in the browser (read-only): ${url}`) }
   })
 
-  // 대화방은 돕는 기능이라, 모드가 실패해도 창 닫기·파일 수정·사람 요청을 막지 않고 그대로 통과시킨다
+  // 대화방은 돕는 기능이라, 모드가 실패해도 창 닫기·파일 수정·사람 요청을 막지 않고 그대로 통과시킨다.
+  // 실패 처리는 각 훅 안에서 한다. 등록 뒤에 .catch(($, e, next) => …)를 붙였더니 디렉터리 검사가 막았다($를 맨 위 함수가 아닌 곳에 넘긴다고 본다, 2026-11-02)
   on('ui.close', { requestId: PANE } as any, async (_$, e, next) => {
     paneOpen = false
     return next(e)
-  }).catch((_$, e, next) => next(e))
+  })
 
   on('prompt.compose', async ($, e, next) => {
     const out = await next(e)
@@ -669,19 +675,27 @@ export const register: Register = (on, options) => {
     return { sections: [...out.sections, { id: 'session-chat:guide', text: guide($), scope: 'session' as const }] }
   })
 
-  for (const tool of EDIT_TOOLS) on('tool.call', { tool } as any, ($, e, next) => guardEdit($, e, next)).catch((_$, e, next) => next(e))
+  // 고치는 도구마다 한 줄씩 등록한다(디렉터리 검사가 등록을 한 줄에 하나씩 읽는다)
+  on('tool.call', { tool: 'Edit' }, guardEdit)
+  on('tool.call', { tool: 'Write' }, guardEdit)
+  on('tool.call', { tool: 'NotebookEdit' }, guardEdit)
+  on('tool.call', { tool: 'MultiEdit' } as any, guardEdit)
 
   // 사람이 보낸 요청만 센다. 모드가 넣은 대화방 글은 세지 않는다
   on('prompt.submit', async ($, e, next) => {
     if ((e as any).origin?.kind !== 'plugin') {
-      if (!active && sid) await activate($)
-      if (active) void chat($, ['activity'])
-      promptsSince += 1
-      recentPrompts.push(e.text.slice(0, 400))
-      if (recentPrompts.length > 6) recentPrompts.shift()
+      try {
+        if (!active && sid) await activate($)
+        if (active) void chat($, ['activity'])
+        promptsSince += 1
+        recentPrompts.push(e.text.slice(0, 400))
+        if (recentPrompts.length > 6) recentPrompts.shift()
+      } catch (err) {
+        log('prompt-submit-error', { error: String(err).slice(0, 300) })
+      }
     }
     return next(e)
-  }).catch((_$, e, next) => next(e))
+  })
 
   // 메인 턴이 끝날 때 요약할 때가 됐으면 한다. 서브에이전트의 턴은 건너뛴다
   on('turn.complete', async ($, e, next) => {

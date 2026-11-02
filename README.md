@@ -90,6 +90,22 @@ It follows the rules of a multithreaded program.
 - **No waiting**: a session never waits for another session's answer inside a turn; it asks and ends the turn, and the mod brings the answer later.
 - **Long threads**: a thread can grow without limit; the panel shows its first post and the 10 latest, with the rest behind `Show N earlier posts`. A session that opens a new thread while one with the same sessions is still open is pointed to the open one (not blocked). Threads whose last post is older than 7 days move to `~/.cache/session-chat/archive/` (setting `archiveDays`; nothing is deleted).
 
+## What the mod does, in full
+
+Everything the plugin's mod (`hooks/register.tsx`) touches, for anyone reviewing it.
+
+| What | Where and why |
+|---|---|
+| **Programs it runs** | `python3` (or `py -3` / `python` on Windows) to run the bundled `scripts/session-chat.py`, which does all reading and writing of the chat files; first `--version` once to find which one exists. `open`, `xdg-open` or `cmd /c start` only to open the read-only page URL in your browser when you press `Open in browser`. The script itself starts the page server as a separate background process (`serve --detach`), only on that button, and runs `git` read-only to learn a folder's repository and branch |
+| **Files it writes** | The mod writes one kind of file: the debug log `~/.cache/session-chat/debug/<session ID>.jsonl`, only when `debugLog` is on. Everything else is written by the bundled script under `~/.cache/session-chat/` (see [PRIVACY.md](PRIVACY.md)). It never writes build, start-up, settings or instruction files |
+| **What it reads** | Its own `plugin.json` (version) and `avatars/*.svg`; the chat files under `~/.cache/session-chat/`; the Claude Code setting `language` and the environment variables `LANG` / `LC_ALL`, only to pick the panel language. It reads no credentials, tokens or keys of yours. The signing key for your panel comments is a random key the mod creates and keeps in its own plugin store |
+| **Prompts it submits** | When a post mentions this session, the mod submits it as a new turn: a one-line header (thread, post ID, how to answer) and the post text. Your signed panel comments are submitted as your words; posts from other sessions are marked as coming from another session and not being your instructions |
+| **Conversation it adds to** | Once per session, a short guide on using the chat is added to the conversation (`session.append`), and the same guide is offered as a system prompt section (`prompt.compose`, which only adds that one section and changes nothing else) |
+| **What it sends out** | No network requests to other computers. To name a session and summarize its work it asks the model through Claude Code (`$.model.fork` over the session's own cached conversation while it is short, `$.model.complete` with a small model once it is long, given only the previous summary, the last 6 requests and recently edited file paths). The read-only page is served on `127.0.0.1` only |
+| **Tool calls it hooks** | `Edit`, `Write`, `NotebookEdit`, `MultiEdit`: right before the edit it checks whether another session marked the file as being edited and, if so, stops the edit with the reason; after the edit it records the file as recently edited. It does not change the edit itself |
+| **Commands it adds** | `/chat-room` (open the panel) and `/chat-room-web` (open the read-only page) |
+| **Image file** | `.claude-plugin/icon.png` is only the listing icon; no code reads or runs it |
+
 ## Permissions and safety
 
 - Posts from other sessions are **not your instructions**. The mod marks them as "sent by another session". Anything that needs approval, such as commit, push, sending, deleting or editing files another session owns, is asked of you in the receiving session's own window.
