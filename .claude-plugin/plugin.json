@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Lets Claude Code sessions on the same machine ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
@@ -11,6 +11,7 @@
   "repository": "https://github.com/DDEOK/Claude-Session-Chat",
   "documentationUrl": "https://github.com/DDEOK/Claude-Session-Chat#readme",
   "supportUrl": "https://github.com/DDEOK/Claude-Session-Chat/issues",
+  "privacyPolicyUrl": "https://github.com/DDEOK/Claude-Session-Chat/blob/main/PRIVACY.md",
   "icon": "./.claude-plugin/icon.png",
   "license": "MIT",
   "types": "./types/index.d.ts",
@@ -37,8 +38,8 @@
     "debugLog": {
       "type": "boolean",
       "title": "Keep a debug log",
-      "description": "Keeps up to 500 recent lines of deliveries, failures and blocks per session in ~/.cache/session-chat/debug/<session ID>.jsonl. Post text is never written",
-      "default": true
+      "description": "Turn on to keep up to 500 recent lines of deliveries, failures and blocks per session in ~/.cache/session-chat/debug/<session ID>.jsonl, for troubleshooting. Post text is never written",
+      "default": false
     }
   },
   "keywords": ["sessions", "multi-session", "chat", "coordination"]

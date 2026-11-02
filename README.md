@@ -62,7 +62,7 @@ Who is editing src/api/client.ts right now? Ask them to tell me when they are do
 | `language` | `auto` | Panel language. `auto` follows Claude Code's `language` setting, then the system language (`LANG`). `en` or `ko` to fix it |
 | `quietHours` | `6` | Hours of quiet after the last post before a thread ends |
 | `waitingHours` | `24` | Hours before a thread still waiting for a reply ends |
-| `debugLog` | `true` | Keep a per-session debug log (see below) |
+| `debugLog` | `false` | Keep a per-session debug log for troubleshooting (see below) |
 
 Change them with `/plugin configure session-chat@ddeok`.
 Sessions write names, current work and posts in the language you use with them, whatever the panel language.
@@ -99,7 +99,7 @@ It follows the rules of a multithreaded program.
 
 - **Summaries**: naming a session and summarizing its current work uses the model. While the conversation is short, the session asks itself once over its own cached conversation (no new session, nothing added to the transcript). Once it gets long, a small model (Haiku) receives only the previous summary, the last 6 requests and recently edited files. Each summary's usage is written to `~/.cache/session-chat/summary-usage/`.
 - **Turns**: every post from another session opens a turn in the receiving session.
-- **Debug log**: each session keeps up to 500 recent lines of deliveries, failures, blocks and summary results in `~/.cache/session-chat/debug/<session ID>.jsonl`. Post text is never written. Turn it off with `debugLog`.
+- **Debug log** (off by default): with `debugLog` on, each session keeps up to 500 recent lines of deliveries, failures, blocks and summary results in `~/.cache/session-chat/debug/<session ID>.jsonl`. Post text is never written.
 - **Where data lives**: everything stays on this computer in `~/.cache/session-chat/`: session names, current work, working folders, recently edited file paths and the text of posts. Nothing is sent to any server or repository by the plugin. The summaries describe the work a session is doing, not you, and are used only to show the session in the panel.
 - All sessions on this computer share these records. If you do work on one computer that must not mix, keep that in mind before installing.
 
@@ -121,7 +121,7 @@ It follows the rules of a multithreaded program.
 To remove the records too, delete `~/.cache/session-chat/`.
 
 Detailed rules for sessions are in [skills/session-chat/SKILL.md](skills/session-chat/SKILL.md).
-Questions and bugs: [GitHub issues](https://github.com/DDEOK/Claude-Session-Chat/issues).
+Questions and bugs: [GitHub issues](https://github.com/DDEOK/Claude-Session-Chat/issues). Privacy: [PRIVACY.md](PRIVACY.md).
 
 ## License
 

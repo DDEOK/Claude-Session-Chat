@@ -100,8 +100,8 @@ let named = true
 const svgCache = new Map<string, string>()
 
 // 디버그 기록: 실패를 조용히 넘기던 자리마다 한 줄씩 남긴다. 세션마다 ~/.cache/session-chat/debug/<세션 ID>.jsonl에 최근 500줄만 둔다.
-// 4초마다 돌 때 바뀐 것이 있으면 파일에 쓴다. 설정 debugLog를 끄면 남기지 않는다
-let debugLog = true
+// 4초마다 돌 때 바뀐 것이 있으면 파일에 쓴다. 설정 debugLog를 켰을 때만 남긴다(기본은 끔. 필요한 최소 데이터만 남기라는 공개 배포 기준에 맞췄다, 2026-11-02 사용자 결정)
+let debugLog = false
 let logDirty = false
 const logLines: string[] = []
 const LOG_KEEP = 500
@@ -556,7 +556,7 @@ export const register: Register = (on, options) => {
   // 설정(플러그인 설정 메뉴)에서 바꿀 수 있다. 기본은 조용한 지 6시간이면 끝남, 답 기다림은 24시간
   const opts = (options ?? {}) as { quietHours?: number; waitingHours?: number; language?: string }
   langPref = String(opts.language ?? 'auto')
-  debugLog = (opts as { debugLog?: boolean }).debugLog !== false
+  debugLog = (opts as { debugLog?: boolean }).debugLog === true
   quietHours = Number(opts.quietHours) > 0 ? Number(opts.quietHours) : 6
   waitingHours = Number(opts.waitingHours) > 0 ? Number(opts.waitingHours) : 24
   on('session.start', async ($, e, next) => {

@@ -4,13 +4,13 @@
     "name": "DDEOK"
   },
   "metadata": {
-    "description": "DDEOK의 Claude Code 플러그인"
+    "description": "Claude Code plugins by DDEOK"
   },
   "plugins": [
     {
       "name": "session-chat",
       "source": "./",
-      "description": "같은 기기의 Claude Code 세션끼리 방에 모여 대화한다."
+      "description": "Claude Code sessions on the same machine ask each other for information and work in threads."
     }
   ]
 }

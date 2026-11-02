@@ -62,7 +62,7 @@ Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 
 | `language` | `auto` | 패널 언어. `auto`는 Claude Code 설정의 `language`, 그다음 시스템 언어(`LANG`)를 따른다. `en`·`ko`로 고정할 수 있다 |
 | `quietHours` | `6` | 마지막 글 뒤 이만큼(시간) 조용하면 끝난 스레드로 본다 |
 | `waitingHours` | `24` | 답 기다림 스레드는 이만큼(시간) 지나야 끝난 것으로 본다 |
-| `debugLog` | `true` | 세션마다 디버그 기록을 남긴다(아래) |
+| `debugLog` | `false` | 문제를 찾을 때 세션마다 디버그 기록을 남긴다(아래) |
 
 `/plugin configure session-chat@ddeok`로 바꾼다.
 패널 언어와 상관없이, 세션은 이름·하는 일·글을 사용자가 그 세션과 쓰는 언어로 쓴다.
@@ -99,7 +99,7 @@ Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 
 
 - **요약 비용**: 이름·하는 일 요약에 모델을 쓴다. 대화가 짧으면 세션 자신의 대화를 캐시에서 다시 읽어 한 번 묻고(새 세션을 만들지 않고 대화 기록에도 남지 않는다), 길어지면 작은 모델(Haiku)에 지난 요약·최근 요청 6개·최근 고친 파일만 보낸다. 요약마다 사용량을 `~/.cache/session-chat/summary-usage/`에 남긴다.
 - **새 턴 비용**: 다른 세션에서 글이 올 때마다 받은 세션에 턴이 하나 생긴다.
-- **디버그 기록**: 세션마다 `~/.cache/session-chat/debug/<세션 ID>.jsonl`에 전달·실패·차단·요약 결과를 최근 500줄까지 남긴다. 글 본문은 남기지 않는다. 설정 `debugLog`로 끈다.
+- **디버그 기록**(기본 꺼짐): 설정 `debugLog`를 켜면 세션마다 `~/.cache/session-chat/debug/<세션 ID>.jsonl`에 전달·실패·차단·요약 결과를 최근 500줄까지 남긴다. 글 본문은 남기지 않는다.
 - **저장 위치**: 모든 기록은 이 컴퓨터의 `~/.cache/session-chat/`에만 있다. 세션 이름·하는 일·작업 폴더·최근 고친 파일 경로·주고받은 글 본문이 들어 있다. 플러그인은 어느 서버나 저장소로도 보내지 않는다. 요약은 사용자가 아니라 세션이 하는 일을 적은 것이고, 패널에 세션을 보여 주는 데만 쓴다.
 - 같은 컴퓨터의 모든 세션이 이 기록을 함께 쓴다. 서로 섞이면 안 되는 일을 같은 컴퓨터에서 한다면 설치 전에 이 점을 고려한다.
 
@@ -121,7 +121,7 @@ Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 
 기록까지 지우려면 `~/.cache/session-chat/` 폴더를 지운다.
 
 세션이 지키는 세부 규칙은 [skills/session-chat/SKILL.md](skills/session-chat/SKILL.md)에 있다.
-문의와 버그: [GitHub issues](https://github.com/DDEOK/Claude-Session-Chat/issues).
+문의와 버그: [GitHub issues](https://github.com/DDEOK/Claude-Session-Chat/issues). 개인정보: [PRIVACY.md](PRIVACY.md).
 
 ## 라이선스
 
