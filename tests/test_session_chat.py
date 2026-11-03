@@ -489,6 +489,38 @@ class SessionChatTest(unittest.TestCase):
         self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "질문 둘", "둘")
         self.assertEqual(json.loads(self.run_chat("aaaa0001", "outbox").stdout), [])
 
+    def test_related_matches_words_glued_in_korean(self):
+        # 사용자 요청의 낱말이 스레드 제목·다른 세션의 하는 일과 겹치면 알린다. 한국어는 붙여 쓰므로(`engine관련`) 글자 종류로 끊는다(2026-11-03)
+        self.join("aaaa0001", "엔진 조사")
+        self.join("bbbb0002", "결제 검토")
+        self.run_chat("bbbb0002", "profile", "--doing", "Engine 결제 연동 검토")
+        tid = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "Engine 조사 범위", "범위 알려 달라").stdout)["thread"]
+        out = json.loads(self.run_chat("cccc0003", "related", "engine관련 정리할 게 있을까?").stdout)
+        self.assertEqual([t["id"] for t in out["threads"]], [tid])
+        self.assertEqual([s["id"] for s in out["sessions"]], ["bbbb0002"])
+        # 흔한 낱말이나 두 글자 한글 낱말 하나만 겹치면 알리지 않는다
+        self.assertEqual(json.loads(self.run_chat("cccc0003", "related", "관련 정보 정리").stdout), {"threads": [], "sessions": []})
+        self.assertEqual(json.loads(self.run_chat("cccc0003", "related", "결제대로 고쳐").stdout), {"threads": [], "sessions": []})
+        # 주제로 찾으면 글을 쓴 적 없는 세션도 그 스레드를 본다. 그냥 threads는 자기 스레드만 보인다
+        self.assertIn(tid, self.run_chat("cccc0003", "threads", "--about", "engine").stdout)
+        self.assertNotIn(tid, self.run_chat("cccc0003", "threads").stdout)
+
+    def test_search_finds_an_answer_that_show_leaves_out(self):
+        # 앞 글에만 있는 답은 show 기본 8개에서 빠진다. show는 생략을 알리고 search는 본문에서 찾는다(2026-11-03 실측)
+        self.join("aaaa0001", "묻는 세션")
+        self.join("bbbb0002", "답한 세션")
+        tid = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "엔진 조사", "근거가 뭐야?").stdout)["thread"]
+        self.run_chat("bbbb0002", "post", "--thread", tid, "리플렉션은 심사 위험이라 브리지를 쓴다")
+        for i in range(8):
+            self.run_chat("aaaa0001", "post", "--thread", tid, f"다른 이야기 {i}")
+        show = self.run_chat("cccc0003", "show", tid).stdout
+        self.assertNotIn("리플렉션", show)
+        self.assertIn("Showing the last 8 of 10 posts", show)
+        self.assertIn("리플렉션", self.run_chat("cccc0003", "show", tid, "--last", "0").stdout)
+        found = self.run_chat("cccc0003", "search", "리플렉션 근거").stdout
+        self.assertIn("리플렉션은 심사 위험", found)
+        self.assertIn("No posts contain", self.run_chat("cccc0003", "search", "없는낱말").stdout)
+
     def test_closed_session_can_be_invited_and_mentioned(self):
         # 꺼진 세션도 초대·멘션된다. 다시 켜지면 그사이 온 글을 받는다(2026-11-03 사용자 결정)
         self.join("aaaa0001", "묻는 세션")

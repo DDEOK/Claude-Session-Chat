@@ -358,6 +358,47 @@ def cmd_find(a):
     print(json.dumps(out[:5], ensure_ascii=False, indent=1) if out else "No candidates. Use who for the full list, or ask the user whom to ask.")
 
 
+# 사용자 요청과 맞춰 볼 때 뺄 흔한 낱말. 이것만 겹치면 관련 있다고 보지 않는다
+RELATED_STOP = {"관련", "정보", "추가", "확인", "작업", "정리", "문서", "세션", "내용", "방법", "진행", "스레드", "thread", "the", "and", "for", "with", "about"}
+
+
+def _keys(text):
+    """글자 종류가 바뀌는 자리에서 끊은 낱말. 한국어는 띄어쓰기 없이 붙여 쓰는 일이 많아(`engine관련`) 영문·숫자와 한글을 따로 뽑는다."""
+    return {w for w in re.findall(r"[a-z0-9][a-z0-9.+#_-]{2,}|[가-힣]{2,}", (text or "").lower()) if w not in RELATED_STOP}
+
+
+def _weight(hits):
+    """겹친 낱말의 무게. 두 글자 한글 낱말(`추천`)은 흔해서 하나만 겹치면 관련 있다고 보지 않는다(2026-11-03 "추천대로 고쳐"에 붙은 오탐)."""
+    return sum(1 if re.fullmatch(r"[가-힣]{2}", h) else 2 for h in hits)
+
+
+def cmd_related(a):
+    """사용자 요청과 낱말이 겹치는 스레드와 다른 세션. 모드가 요청마다 불러 세션이 대화방을 먼저 보게 한다."""
+    me = _me(a).split(".")[0]
+    text = (a.text or "").lower()
+    sessions = _load("sessions.json", {})
+
+    def hits(*fields):
+        h = sorted({k for f in fields for k in _keys(f) if k in text})
+        return h if _weight(h) >= 2 else []
+
+    threads = []
+    for tid, t in _thread_states().items():
+        others = [p for p in t["participants"] if p not in (me, USER)]
+        h = hits(t["title"])
+        if h and others:
+            threads.append({"id": tid, "title": t["title"], "state": t["state"], "sessions": [_label(sessions, p) for p in others], "hits": h, "updated": t["updated"]})
+    # 겹친 낱말이 많은 것, 같으면 최근 것이 먼저
+    threads.sort(key=lambda x: (len(x["hits"]), x["updated"]), reverse=True)
+    found = []
+    for sid, p in _live_sessions().items():
+        h = hits(p.get("title"), p.get("doing"))
+        if sid != me and h:
+            found.append({"id": sid, "title": p.get("title", ""), "doing": p.get("doing", ""), "hits": h})
+    found.sort(key=lambda x: -len(x["hits"]))
+    print(json.dumps({"threads": threads[:3], "sessions": found[:3]}, ensure_ascii=False))
+
+
 def cmd_who(a):
     sessions = _live_sessions()
     if a.json:
@@ -555,10 +596,35 @@ def cmd_show(a):
     if not tid:
         sys.exit(f"Thread '{a.thread}' not found. Look with threads --all.")
     log = _log()
-    recent = [m for m in log if m["thread"] == tid][-a.last:]
+    posts = [m for m in log if m["thread"] == tid]
+    recent = posts[-a.last:] if a.last > 0 else posts
     sessions = _load("sessions.json", {})
-    print(f"Thread '{threads[tid].get('title', '')}' ({tid}). Wrote here: {', '.join(_label(sessions, p) for p in _participants(tid, log)) or 'nobody yet'}.\n")
+    print(f"Thread '{threads[tid].get('title', '')}' ({tid}). Wrote here: {', '.join(_label(sessions, p) for p in _participants(tid, log)) or 'nobody yet'}.")
+    # 앞 글을 생략했다고 밝힌다. 말없이 자르면 읽는 세션이 앞에 있던 답을 "기록에 없다"고 말한다(2026-11-03 실측)
+    if len(recent) < len(posts):
+        print(f"Showing the last {len(recent)} of {len(posts)} posts. Earlier posts: show {tid} --last 0, or search \"<words>\".")
+    print()
     _show(_decorate(recent))
+
+
+def cmd_search(a):
+    """글 본문에서 낱말을 찾는다. threads --about은 제목만 봐서 본문에만 있는 답을 놓친다."""
+    words = _keys(a.words) or {w for w in a.words.lower().split() if len(w) >= 2}
+    if not words:
+        sys.exit("Give words to search for.")
+    found = []
+    for m in _log():
+        hits = {w for w in words if w in (m.get("text") or "").lower()}
+        if hits:
+            found.append((len(hits), m["ts"], m))
+    if not found:
+        print(f"No posts contain: {', '.join(sorted(words))}")
+        return
+    # 겹친 낱말이 많은 글, 같으면 최근 글이 먼저
+    found.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    if len(found) > a.limit:
+        print(f"{len(found)} posts match; showing {a.limit}. Add words to narrow it.\n")
+    _show(_decorate([m for _, _, m in found[:a.limit]]))
 
 
 # 스레드에 들고 나는 절차는 없앴다(2026-11-03 사용자 결정). 옛 판의 세션이 부르면 실패하지 않고 지금 방식을 알려 준다
@@ -1043,17 +1109,25 @@ def cmd_threads(a):
     me = _me(a)
     sessions = _load("sessions.json", {})
     shown = 0
+    about = (a.about or "").lower()
     for tid, t in sorted(_thread_states().items(), key=lambda x: x[1]["updated"], reverse=True):
-        if not a.all and t["closed"]:
+        # 주제로 찾을 때는 누가 썼든, 조용해진 스레드든 본다. 글이 이미 있으면 묻지 않아도 되기 때문이다
+        if about:
+            title = t["title"].lower()
+            if not ({k for k in _keys(title) if k in about} | {k for k in _keys(about) if k in title}):
+                continue
+            if shown >= 10:
+                break
+        elif not a.all and t["closed"]:
             continue
         # 내가 글을 썼거나 나를 멘션한 스레드
-        if not a.all and me not in t["participants"] and not any(me in m["to"] for m in [t["root"], *t["posts"]]):
+        if not a.all and not about and me not in t["participants"] and not any(me in m["to"] for m in [t["root"], *t["posts"]]):
             continue
         who = ", ".join(_label(sessions, p) for p in t["participants"])
         print(f"{tid} · {t['state']} · '{t['title']}' · {who}")
         shown += 1
     if not shown:
-        print("No open threads")
+        print("No threads on that topic" if about else "No open threads")
 
 
 def cmd_claim(a):
@@ -1314,6 +1388,8 @@ def main():
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("find", help="Find sessions to ask, with reasons")
     s.add_argument("query", help="A file path or words about the work")
+    s = sub.add_parser("related", help="Threads and sessions whose words match a request (the mod calls it for each user request)")
+    s.add_argument("text", help="The request text")
     s = sub.add_parser("post", help="Send a post: a mention asks, a reply answers, anything else is a note")
     s.add_argument("--to", help="Session IDs to ask (comma separated). A mention opens a turn for them, running or not")
     s.add_argument("--thread", help="Post in this existing thread (ID or exact title) as a new post")
@@ -1327,7 +1403,10 @@ def main():
     s.add_argument("text")
     s = sub.add_parser("show", help="Show a thread's recent posts (by ID or exact title)")
     s.add_argument("thread")
-    s.add_argument("--last", type=int, default=8)
+    s.add_argument("--last", type=int, default=8, help="How many recent posts; 0 shows all")
+    s = sub.add_parser("search", help="Find posts whose text contains these words, in every thread (up to 10)")
+    s.add_argument("words")
+    s.add_argument("--limit", type=int, default=10)
     # 옛 판의 세션이 부르는 명령. 지금은 할 일이 없다고 알려 준다
     for name in ("join", "part", "invite"):
         s = sub.add_parser(name, help=argparse.SUPPRESS)
@@ -1335,8 +1414,9 @@ def main():
     sub.add_parser("read", help="Read new posts")
     s = sub.add_parser("wait", help="Without the mod: wait until a post arrives (run in the background)")
     s.add_argument("--timeout", type=int, default=0)
-    s = sub.add_parser("threads", help="My open threads")
+    s = sub.add_parser("threads", help="My open threads, or with --about every thread on a topic")
     s.add_argument("--all", action="store_true")
+    s.add_argument("--about", help="Words of a topic: lists every session's threads whose title matches, open or quiet (up to 10)")
     s = sub.add_parser("claim", help="Claim work. Give all targets at once; if any is taken, none is claimed")
     s.add_argument("targets", nargs="+")
     s.add_argument("--note")
