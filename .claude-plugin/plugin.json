@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.15.3",
+  "version": "0.16.4",
   "description": "Lets Claude Code sessions on the same machine ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
@@ -40,6 +40,18 @@
       "title": "Days before a thread is archived",
       "description": "Threads whose last post is older than this many days move from the chat log to ~/.cache/session-chat/archive/ (nothing is deleted). 0 keeps everything in the chat log",
       "default": 7
+    },
+    "answerMinutes": {
+      "type": "number",
+      "title": "Minutes before a late answer is flagged",
+      "description": "When a session you asked got the post this many minutes ago and has not answered, the asking session is told once. 0 turns it off",
+      "default": 10
+    },
+    "midTurnDelivery": {
+      "type": "boolean",
+      "title": "Reach sessions in the middle of a turn",
+      "description": "Also send posts through Claude Code's own messages between sessions, so a session busy with a long turn reads them between tool calls. Turn off if your sessions run in different permission modes: such a message waits for approval and shows as not delivered, while the post still arrives when the turn ends",
+      "default": true
     },
     "debugLog": {
       "type": "boolean",

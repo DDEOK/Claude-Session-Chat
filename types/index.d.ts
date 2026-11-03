@@ -29,6 +29,8 @@ export type Post = {
   wake?: string[]
   // poll이 받는 세션 기준으로 붙인다: 턴을 열지 않고 대화 기록에만 넣는 글
   quiet?: boolean
+  // 보낼 때 꺼져 있던 받는 세션. 다시 켜지면 받는다
+  offline?: string[]
   from_title?: string
   thread_title?: string
   age?: string
@@ -40,11 +42,8 @@ export type Thread = {
   root: Post
   posts: Post[]
   state: string
+  // 그 스레드에 글을 쓴 세션(사용자 빼고), 처음 쓴 순서. 글에서 계산한 것이다
   participants: string[]
-  // 스레드에서 나간 세션과 나간 시각
-  parted?: Record<string, string>
-  // 스레드가 열린 뒤 들어오고 나간 기록. how: joined(스스로) · invited · mentioned · wrote(글을 쓰며), by: 들인 세션
-  events?: { ts: string; who: string; what: 'joined' | 'left'; how?: string; by?: string }[]
   updated: string
   closed: boolean
   quiet: string

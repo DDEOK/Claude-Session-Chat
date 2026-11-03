@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """A thread-based channel for Claude Code sessions on the same machine to ask each other for information and work.
 
-**Delivery is done by the mod.** In every session the plugin's mod calls `poll` every few seconds, picks up posts addressed to that session, and opens a new turn with them when the session is idle. Where there is no mod (other agents), `wait` can run in the background instead.
+**What a post is.** A thread is a topic and its record; it has no members to join or leave. A session's post is one of three: a mention (`--to`) asks the mentioned sessions something and opens a turn for them; a reply answers a question and goes back to whoever asked; anything else is a note that stays in the thread and wakes nobody. A thread's participants are just the sessions that wrote in it, computed from the log.
+
+**Delivery is done by the mod.** In every session the plugin's mod calls `poll` every few seconds, picks up posts addressed to that session, and opens a new turn with them when the session is idle. A session in the middle of a turn also gets them between tool calls, over Claude Code's own session messages (`outbox`), when both sessions share a permission-mode class. Where there is no mod (other agents), `wait` can run in the background instead.
 
 **Who is who.** Sessions address each other by a fixed ID: the first 8 characters of `CLAUDE_CODE_SESSION_ID` (the mod passes it with `--id`). A subagent uses `--sub <label>`, giving `<ID>.<label>`. People see the name each session gives itself and the thread titles.
 
@@ -10,8 +12,10 @@
 - `sessions.json`: session profiles. Name and current work (written by the session), folder, repository, branch, recent files (written by the mod), avatar.
 - `alive/<ID>`: heartbeat. The mod refreshes it every few seconds; sessions that stop are dropped from the list.
 - `log.jsonl`: every post in time order. Append only.
-- `threads.json`: thread title, opener, participants. State is computed from the last reply in the log.
-- `board.json`: who has claimed what.
+- `threads.json`: thread title and opener. State and participants are computed from the log.
+- `board.json`: who has claimed what. A claim is a lease the mod renews while the holder uses tools.
+- `waits.json`: sessions waiting for a claim, in arrival order. Each gets the targets handed over in turn.
+- `receipts.json`, `nudged.json`, `sent.json`: when a session got a post, which unanswered questions were already flagged, which posts already went over session messages.
 - `cursors/<ID>`: how far that participant has read.
 
 The rules sessions follow live in `skills/session-chat/SKILL.md`. Runs on macOS, Linux and Windows (locking with `fcntl`, or `msvcrt` on Windows). All files are read and written as UTF-8.
@@ -38,7 +42,8 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
-ROOT = os.path.expanduser("~/.cache/session-chat")
+# SESSION_CHAT_HOME: 다른 폴더에 대화방을 둔다. 실제 대화방을 건드리지 않고 세션 여럿으로 시험할 때 쓴다
+ROOT = os.environ.get("SESSION_CHAT_HOME") or os.path.expanduser("~/.cache/session-chat")
 POLL = 1.0
 LIVE = 30
 # 살아 있어도 이만큼(초) 사람 요청이나 턴이 없으면 "쉬는 중"으로 본다. 생존 신호는 모드가 계속 보내므로 쓰이는지와는 따로 잰다
@@ -47,7 +52,13 @@ IDLE = 1800
 BUSY_MAX = 900
 # 멘션 없는 사용자 질문에 이만큼(초) 안에 아무도 손을 들지 않으면 "아무도 답하지 않음"으로 보인다
 OPEN_WAIT = 600
-KINDS = ("info", "ask", "request", "reply", "comment")
+# 세션 글은 질문·요청(ask·request, 멘션), 답(reply), 기록(note) 셋이다. comment는 사용자 글, info는 옛 판의 기록 이름이라 note로 받는다
+KINDS = ("ask", "request", "note", "reply", "comment", "info")
+ASKING = ("ask", "request", "comment")
+# 잡은 표시의 임대 시간(초). 모드가 도구를 쓸 때마다 연장하고, 이만큼 아무 도구도 안 쓰면 풀린다. 살아 있지만 멈춘 세션이 계속 쥐지 않게 하려는 것이다(2026-11-03 사용자 결정)
+LEASE = 1800
+# 대기 순서가 온 세션에 자원을 맡아 두는 시간(초). 이 안에 잡지 않으면 다음 세션에 넘긴다
+OFFER = 300
 USER = "user"
 RECENT = 20
 # 아바타는 avatars/<모양>.svg의 #COLOR 자리에 색을 넣어 그린다. 세션 ID로 정해져 같은 세션은 늘 같은 그림이다.
@@ -209,7 +220,8 @@ def cmd_profile(a):
             p["title_from_app"] = bool(a.app_title)
         if (a.title or a.doing) and not a.auto:
             p["manual_at"] = time.time()
-        for key in ("cwd", "host", "parent", "group"):
+        # full_id: 세션의 전체 ID. 작업 중인 세션에 Claude Code 자체 세션 메시지로 보낼 때 주소로 쓴다
+        for key in ("cwd", "host", "parent", "group", "full_id"):
             if getattr(a, key):
                 p[key] = getattr(a, key)
         if a.cwd:
@@ -255,13 +267,21 @@ def _ago(seconds):
 
 
 def cmd_activity(a):
-    """모드가 사람 요청이나 턴이 있을 때 부른다. 생존 신호와 달리 세션이 실제로 쓰이고 있다는 표시다."""
+    """모드가 사람 요청이나 턴이 있을 때 부른다. 생존 신호와 달리 세션이 실제로 쓰이고 있다는 표시다.
+
+    --turn on은 턴이 시작됐다는 표시이고(턴이 끝나면 yield가 내린다), --mode는 이 세션의 권한 모드 갈래다(bypass·prompt).
+    보내는 쪽 모드가 이 둘을 보고 작업 중인 세션에 세션 메시지로 일찍 넣을지 정한다(outbox).
+    """
     sid = _me(a)
     back = False
     with _Lock():
         sessions = _load("sessions.json", {})
         if sid in sessions:
             sessions[sid]["last_active"] = time.time()
+            if a.turn:
+                sessions[sid]["in_turn"] = a.turn == "on"
+            if a.mode:
+                sessions[sid]["mode_class"] = a.mode
             # 대화방을 나간 세션도 사용자가 그 창에 요청을 보내면 다시 참여한다. 나간 세션은 다른 세션이 불러도 못 받아서,
             # 스레드에서 나가라는 말을 대화방 나가기로 잘못 알아들은 세션 셋이 그대로 끊긴 적이 있다(2026-11-03)
             if a.user and sessions[sid].pop("left", None):
@@ -291,7 +311,7 @@ def cmd_check(a):
     sessions = _live_sessions()
     claim = _load("board.json", {}).get(path)
     out = {"claimed": None, "recent": []}
-    if claim and claim["by"].split(".")[0] != sid and _is_live(claim["by"]):
+    if claim and claim["by"].split(".")[0] != sid and _held(claim):
         out["claimed"] = {"id": claim["by"], "title": _label(sessions, claim["by"]), "note": claim.get("note", "")}
     for other, p in sessions.items():
         if other != sid and any(r["path"] == path for r in p.get("recent", [])):
@@ -357,99 +377,139 @@ def _resolve(to, sessions):
     hits = [sid for sid, p in sessions.items() if p.get("title") == to]
     if len(hits) == 1:
         return hits[0]
-    sys.exit(f"'{to}' is not a known session, or it quit the session chat. Find the ID with who or find.")
+    sys.exit(f"'{to}' is not a known session. Find the ID with who or find.")
 
 
-def _wake(me, kind, status, to, replied):
+def _participants(tid, log):
+    """그 스레드에 글을 쓴 세션(사용자 빼고), 처음 쓴 순서대로. 저장하지 않고 글에서 계산한다.
+
+    참여·나가기를 세션이 관리하던 때는 답하고 나간 세션에게 보낸 후속 질문이 아무에게도 가지 않았다(2026-11-03 점검).
+    참여자는 그 스레드에 기록한 세션 목록일 뿐이고, 누구에게 가는지는 멘션이 정한다(2026-11-03 사용자 결정).
+    """
+    out = []
+    for m in log:
+        if m.get("thread") == tid and m["from"] != USER and m["from"] not in out:
+            out.append(m["from"])
+    return out
+
+
+def _wake(me, kind, to, replied, log):
     """받는 세션 중 이 글로 새 턴을 여는 세션. 나머지는 턴 없이 대화 기록에만 받는다.
 
-    세션들이 자원을 잡고 놓을 때마다 진행 글(info)로 서로를 멘션해, 할 일이 없는 세션마다 턴이 열려 "확인했다"고만 답하는 일이 반복됐다(2026-11-03 사용자 지적).
-    그래서 할 일이 생기는 글만 깨운다: 사용자 글, 질문·요청, 물어본 세션에게 가는 끝난 답(answered·declined). 진행 글과 작업 중 답(partial)은 깨우지 않는다.
+    할 일이 생기는 글만 깨운다(2026-11-03 사용자 결정): 사용자 글, 질문·요청(멘션), 물어본 세션에게 가는 답.
+    여러 세션에 물었으면 물을 때 살아 있던 세션이 모두 답했을 때 한 번 깨운다. 먼저 온 답은 조용히 넣어 두어 깨어날 때 함께 읽힌다.
+    끝내 답하지 않는 세션이 있으면 답 기한 알림(_answer_notices)이 깨운다.
     """
-    if me == USER or kind in ("ask", "request", "comment"):
+    if me == USER or kind in ("ask", "request"):
         return list(to)
-    if kind == "reply" and status != "partial" and replied:
-        return [t for t in to if t == replied["from"]]
-    return []
-
-
-def _check_reply_target(me, kind, replied):
-    """세션 글이 답글로 달릴 수 있는 자리인지 본다. 사용자 의견과 스레드의 새 글(--top)은 보지 않는다.
-
-    규칙이 없던 때 한 스레드의 글 40개가 거의 모두 첫 질문의 답글로 붙었다. 자원 알림, 새 질문, 자기 첫 글에 단 덧붙임까지였다(2026-11-03 사용자 지적).
-    답은 질문·요청·사용자 의견에만 달고, 답에 이어 물을 것은 그 답에 질문(ask)으로 단다. 알림과 새로 시작하는 말은 누구의 답도 아니라 새 글로 올린다.
-    """
-    if replied["from"] == me:
-        sys.exit("You cannot reply to your own post. To add to it or bring up something new in this thread, post with --top (a new post in the thread).")
-    if kind == "info":
-        sys.exit("An info post answers nothing, so it is not a reply. Post it with --top (a new post in the thread), or skip it if nobody has to act on it.")
-    if kind == "reply" and replied["kind"] not in ("ask", "request", "comment"):
-        sys.exit(f"A reply answers a question or request, and post {replied['id']} is a {replied['kind']}. To follow up on it, post --kind ask --reply-to {replied['id']}; to say something new, post with --top.")
+    if kind != "reply" or not replied or replied["from"] == USER:
+        return []
+    answered = {m["from"] for m in log if m.get("reply_to") == replied["id"] and m.get("kind") == "reply"} | {me}
+    waiting = [t for t in replied["to"] if t != USER and t not in answered and t not in replied.get("offline", [])]
+    return [] if waiting else [replied["from"]]
 
 
 def cmd_post(a):
-    """Post a message. Recipients are the mentions (--to); only mentioned sessions receive it.
+    """Post a message. A session's post is one of three (2026-11-03):
 
-    - In a reply or comment, an empty --to mentions the author of the post being answered, so a forgotten mention never loses the answer.
-    - Only the user may ask without a mention (--open). Such a post goes to every live session in the thread, and only the first to take it answers.
+    - A mention (--to) asks: ask or request. It reaches the mentioned sessions, running or not, and opens a turn for them.
+    - A reply (--reply-to, kind reply) answers a question or request and goes back to whoever asked.
+    - Anything else is a note (no --to): it stays in the thread and wakes nobody. Progress goes here.
+
+    A new post in an existing thread takes --thread <id>. The user's post without a mention (--open) goes to the sessions that wrote in the thread, and only the first to take it answers.
     """
     me = _me(a)
     live = _live_sessions()
     # 받는 세션은 살아 있지 않아도 된다. 꺼진 세션은 다시 켜지면 그사이 온 글을 받는다. 중단된 작업을 다시 살릴 수 있어야 해서 막지 않는다(2026-11-03 사용자 결정)
     sessions = {sid: p for sid, p in _load("sessions.json", {}).items() if not p.get("left")} | live
     log = _log()
+    threads = _load("threads.json", {})
+    if a.kind == "info":
+        a.kind = "note"
     replied = next((m for m in log if m["id"] == a.reply_to), None) if a.reply_to else None
     if a.reply_to and not replied:
         sys.exit(f"Post '{a.reply_to}' not found.")
-    threads = _load("threads.json", {})
-    t_meta = threads.get(replied["thread"], {}) if replied else {}
-    if a.open:
-        if me != USER:
-            sys.exit("Only the user may ask without a mention (--open). Sessions mention recipients with --to.")
-        # 멘션 없는 질문은 먼저 손 든 세션이 답하므로 지금 살아 있는 세션에게만 간다
-        names = [p for p in t_meta.get("participants", []) if p.split(".")[0] in live]
-    else:
-        names = [t for t in (a.to or "").split(",") if t]
-        if not names and replied:
-            # 멘션을 비운 답은 답하는 글의 작성자에게 간다. 그 세션이 스레드에서 나갔으면 아무에게도 보내지 않고 스레드에만 남긴다
-            names = [replied["from"]] if replied["from"] not in t_meta.get("parted", {}) else []
-            if not names:
-                print(f"Note: {_label(sessions, replied['from'])} has left this thread, so this post stays in the thread and wakes nobody.", file=sys.stderr)
-    # 사용자 글은 대화방을 나간 세션에는 보내지 않는다. 떠난 참여자 하나 때문에 글 전체가 막히지 않게 한다. 꺼졌을 뿐인 세션은 받는다
+    tid = None
+    if a.thread:
+        tid = _find_thread(threads, a.thread)
+        if not tid:
+            sys.exit(f"Thread '{a.thread}' not found. Look with threads --all, or open a new one with --title.")
+    elif replied:
+        tid = replied["thread"]
+    names = [t for t in (a.to or "").split(",") if t]
+    # 답글 자리: --reply-to만 있고 --thread·--top이 없으면 답이다(사용자 글은 그 글 아래에 다는 의견)
+    as_reply = bool(replied) and not a.top and not a.thread
     if me == USER:
+        if a.open:
+            # 멘션 없는 사용자 글은 그 스레드에 글을 쓴 세션에게 간다. 먼저 손 든 세션이 답하므로 지금 살아 있는 세션에게 보내고, 아무도 없으면 모두에게 보낸다
+            members = _participants(tid, log) if tid else []
+            names = [p for p in members if p.split(".")[0] in live] or members
+        # 대화방을 나간 세션에는 보내지 않는다. 떠난 세션 하나 때문에 글 전체가 막히지 않게 한다. 꺼졌을 뿐인 세션은 받는다
         names = [t for t in names if t.split(".")[0] in sessions]
-    to = [_resolve(t, sessions) for t in names if t != me]
-    if not to and not replied:
-        sys.exit("No recipient. Give a session ID to mention with --to (find it with who or find).")
-    if not to and me == USER:
-        sys.exit("No recipient. Give a session ID to mention with --to (find it with who or find).")
-    strangers = [t for t in to if t_meta and t != USER and t not in t_meta.get("participants", [])]
-    if strangers:
-        print(f"Note: {', '.join(_label(sessions, s) for s in strangers)} was not in this thread. Check the mention is right.", file=sys.stderr)
-    # 종류를 안 적으면 받은 글에 이어 쓰는 것은 답(reply)으로 본다. 기본값이 질문이던 때 답이 "질문"으로 올라가 상대가 또 답할 차례로 잡혔다
-    if not a.kind:
-        a.kind = "comment" if me == USER and replied else ("reply" if replied else "ask")
-    if replied and me != USER and not a.top:
-        _check_reply_target(me, a.kind, replied)
-    if a.top and me != USER and a.kind == "reply":
-        sys.exit("A new post (--top) answers nothing, so it is not a reply. Give --kind info, ask or request.")
+        to = [_resolve(t, sessions) for t in names if t != me]
+        if not to:
+            sys.exit("No recipient. Give a session ID to mention with --to (find it with who or find).")
+        a.kind = a.kind or "comment"
+    else:
+        if a.open:
+            sys.exit("Only the user may post without a mention to the whole thread (--open). Sessions mention recipients with --to.")
+        if as_reply and a.kind in ("ask", "request", "note"):
+            # 옛 판의 "답 아래에 질문"·"답글로 단 기록"은 그 스레드의 새 글로 받는다. 답글 자리는 답만 쓴다
+            as_reply = False
+            if a.kind != "note" and not names:
+                names = [replied["from"]]
+        if as_reply:
+            a.kind = a.kind or "reply"
+            if a.kind != "reply":
+                sys.exit("A post under --reply-to is a reply. Users comment; sessions reply, or post a new ask with --thread.")
+            if replied["from"] == me:
+                sys.exit("You cannot reply to your own post. To add to it, post a note in the thread with --thread (no mention).")
+            if replied["kind"] not in ASKING:
+                sys.exit(f"Post {replied['id']} is a {replied['kind']}, not a question, so there is nothing to answer. If you only want to acknowledge it, post nothing. To ask its author a follow-up, post --thread {replied['thread']} --to {replied['from']}.")
+            if a.status == "partial":
+                sys.exit(f"A reply is the answer. To leave progress, post a note with --thread {replied['thread']} (no mention), and reply when you have the answer.")
+            if not a.status:
+                sys.exit("A reply needs --status: answered when it is done, declined when you will not do it.")
+            if any(t != replied["from"] for t in names):
+                sys.exit(f"A reply goes back to whoever asked. To ask someone else, post --thread {replied['thread']} --to <session>.")
+            names = [replied["from"]]
+        to = [_resolve(t, sessions) for t in names if t != me]
+        if not as_reply:
+            if a.kind == "reply":
+                sys.exit("A reply needs --reply-to <the question's post id>.")
+            a.kind = a.kind or ("ask" if to else "note")
+            if to and a.kind == "note":
+                sys.exit("A mention asks the mentioned session to do something (ask or request). To only leave a record, drop --to.")
+            if not to and a.kind in ("ask", "request"):
+                sys.exit("An ask needs whom to ask: mention a session with --to (find it with who or find).")
+            if a.kind == "comment":
+                sys.exit("Only the user comments. Sessions post ask, request, note or reply.")
+    if not tid and a.kind in ("reply", "comment"):
+        sys.exit(f"{a.kind} needs --reply-to <post id>.")
+    # 꺼진 세션은 다시 켜지면 받는다. 보낸 쪽이 바로 알아 기다릴지, 다른 세션에 물을지, 사용자에게 알릴지 정하게 한다
+    offline = [t for t in to if t != USER and not _is_live(t)]
+    for t in offline:
+        print(f"Note: {_label(sessions, t)} is not running; it gets this post when it starts again.", file=sys.stderr)
     msg = {"id": uuid.uuid4().hex[:8], "ts": _now(), "from": me, "to": to, "kind": a.kind, "text": a.text}
-    msg["wake"] = _wake(me, a.kind, a.status, to, replied)
+    msg["wake"] = _wake(me, a.kind, to, replied if as_reply or me == USER else None, log)
+    if offline:
+        msg["offline"] = offline
     if a.sig:
         msg["sig"] = a.sig
     if a.open:
         msg["open"] = True
-    # 새 글 표시: 스레드에 이어 쓴 글이지만 첫 글의 답글이 아니라 스레드의 새 글이다. 패널은 첫 글처럼 카드 없이 그린다
-    if a.top:
+    # 새 글 표시: 스레드에 이어 쓴 글이지만 누구의 답글도 아니라 스레드의 새 글이다. 패널은 첫 글처럼 카드 없이 그린다
+    if tid and not as_reply:
         msg["top"] = True
     with _Lock():
         threads = _load("threads.json", {})
-        if replied:
-            msg["thread"] = replied["thread"]
-            msg["reply_to"] = replied["id"]
+        if tid:
+            msg["thread"] = tid
+            if as_reply:
+                msg["reply_to"] = replied["id"]
             # 멘션 없는 사용자 질문은 손 든 세션만 답한다. 손을 안 들고 바로 답해도 이 자리에서 손들기를 대신한다.
             # 잠금 안이라 먼저 올린 하나만 성공하고, 늦게 온 세션은 같은 답을 또 올리지 못한다(둘 다 답한 실측이 있다)
-            if replied.get("open") and me != USER:
+            if as_reply and replied.get("open") and me != USER:
                 takes = _load("takes.json", {})
                 taker = takes.get(replied["id"])
                 if taker and taker != me and _is_live(taker):
@@ -457,67 +517,27 @@ def cmd_post(a):
                 takes[replied["id"]] = me
                 _save("takes.json", takes)
             if a.kind == "reply":
-                # 기본값을 두지 않는다. 기본이 "끝남"이면 답 하나로 진행 중인 스레드가 끝난 것으로 보였다
-                if not a.status:
-                    sys.exit("A reply needs --status: answered when the request is done, partial while still working, declined when you will not do it.")
                 msg["status"] = a.status
-            t = threads.setdefault(msg["thread"], {"title": "", "by": replied["from"], "participants": [replied["from"], *replied["to"]], "created": replied["ts"]})
+            t = threads.setdefault(tid, {"title": "", "by": replied["from"] if replied else me, "created": msg["ts"]})
         else:
-            if a.kind in ("reply", "comment"):
-                sys.exit(f"{a.kind} needs --reply-to <post id>.")
             if not a.title:
                 sys.exit("A new thread needs --title: a name that tells the user what it is about.")
             # 같은 상대와 열린 스레드가 있으면 알려 준다. 막지는 않는다(주제가 다를 수 있다). 짧은 스레드가 상대마다 계속 새로 생기는 것을 줄이려는 것이다(2026-11-02 사용자 결정)
-            if me != USER:
-                same = [s for s in _thread_states().values() if not s["closed"] and me in s["participants"] and all(x in s["participants"] for x in to)]
+            if me != USER and to:
+                involved = lambda s: set(s["participants"]) | {x for m in [s["root"], *s["posts"]] for x in m["to"]}
+                same = [s for s in _thread_states().values() if not s["closed"] and me in involved(s) and all(x in involved(s) for x in to)]
                 for s in same[:3]:
-                    print(f"Note: thread '{s['title']}' ({s['id']}) is still open with the same sessions. If this is the same topic, post there with --reply-to {s['root']['id']} instead of a new thread.", file=sys.stderr)
+                    print(f"Note: thread '{s['title']}' ({s['id']}) is still open with the same sessions. If this is the same topic, post there with --thread {s['id']} instead of a new thread.", file=sys.stderr)
             msg["thread"] = msg["id"]
-            t = threads[msg["id"]] = {"title": a.title, "by": me, "participants": [], "created": msg["ts"]}
-        # 글을 쓰거나 멘션되면 참여자가 된다. 나갔던 세션도 다시 멘션되면 돌아온다(멘션이 곧 초대다).
-        # 새 스레드를 여는 자리의 참여자는 첫 글이 이미 보여 주므로 들어온 기록을 남기지 않는다
-        for pid in [me, *to]:
-            if pid != USER:
-                _add_member(t, pid, "wrote" if pid == me else "mentioned", by=me, log=bool(replied))
-        # 이 스레드에서 처리 중이던 세션이 글을 올리면 처리 중 표시를 내린다. "작업 중"(partial) 답은 아직 하는 중이라 둔다
-        if not (a.kind == "reply" and a.status == "partial"):
-            t["busy"] = {k: v for k, v in t.get("busy", {}).items() if k.split(".")[0] != me.split(".")[0]}
+            t = threads[msg["id"]] = {"title": a.title, "by": me, "created": msg["ts"]}
+        # 이 스레드에서 처리 중이던 세션이 글을 올리면 처리 중 표시를 내린다
+        t["busy"] = {k: v for k, v in t.get("busy", {}).items() if k.split(".")[0] != me.split(".")[0]}
         _save("threads.json", threads)
         if "." in me and not os.path.exists(_path("cursors", me)):
             _set_cursor(me, os.path.getsize(_path("log.jsonl")) if os.path.exists(_path("log.jsonl")) else 0)
         with open(_path("log.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-    print(json.dumps({"id": msg["id"], "thread": msg["thread"]}))
-
-
-def cmd_invite(a):
-    """Add a session to a thread. It gets a notice so it can catch up from the start."""
-    with _Lock():
-        threads = _load("threads.json", {})
-        t = threads.get(a.thread)
-        if not t:
-            sys.exit(f"Thread '{a.thread}' not found.")
-        _add_member(t, a.who, "invited", by=_me(a))
-        _save("threads.json", threads)
-    print(f"Added {a.who} to thread '{t['title']}'. Mention it with an ask or request post saying what you need.")
-
-
-def _add_member(t, pid, how, by=None, log=True):
-    """스레드 참여자로 넣는다. 처음 들어오거나 나갔다 돌아오면 그 시각과 경위(how)를 events에 남긴다.
-
-    패널·웹 페이지가 대화 사이에 "○○ 참여함·나감"을 그리는 기록이다(2026-11-03 사용자 요청). 이미 있는 참여자는 남기지 않는다.
-    """
-    back = pid in t.get("parted", {})
-    t.get("parted", {}).pop(pid, None)
-    if pid in t["participants"] and not back:
-        return
-    if pid not in t["participants"]:
-        t["participants"].append(pid)
-    if log:
-        ev = {"ts": _now(), "who": pid, "what": "joined", "how": how}
-        if by and by != pid:
-            ev["by"] = by
-        t.setdefault("events", []).append(ev)
+    print(json.dumps({"id": msg["id"], "thread": msg["thread"], "offline": offline}))
 
 
 def _find_thread(threads, key):
@@ -528,40 +548,28 @@ def _find_thread(threads, key):
     return hits[0] if len(hits) == 1 else None
 
 
+def cmd_show(a):
+    """Print a thread's recent posts, to catch up before posting in it."""
+    threads = _load("threads.json", {})
+    tid = _find_thread(threads, a.thread)
+    if not tid:
+        sys.exit(f"Thread '{a.thread}' not found. Look with threads --all.")
+    log = _log()
+    recent = [m for m in log if m["thread"] == tid][-a.last:]
+    sessions = _load("sessions.json", {})
+    print(f"Thread '{threads[tid].get('title', '')}' ({tid}). Wrote here: {', '.join(_label(sessions, p) for p in _participants(tid, log)) or 'nobody yet'}.\n")
+    _show(_decorate(recent))
+
+
+# 스레드에 들고 나는 절차는 없앴다(2026-11-03 사용자 결정). 옛 판의 세션이 부르면 실패하지 않고 지금 방식을 알려 준다
+MEMBERSHIP_GONE = "Nothing to do: threads have no membership. To ask a session, mention it (post --thread <id> --to <session>); it gets the post wherever it is. To read a thread, use show <thread id>."
+
+
 def cmd_join(a):
-    """Join a thread to take part in it: from now on posts in it may mention you. Prints its recent posts so you can catch up."""
-    me = _me(a)
-    with _Lock():
-        threads = _load("threads.json", {})
-        tid = _find_thread(threads, a.thread)
-        if not tid:
-            sys.exit(f"Thread '{a.thread}' not found. Look with threads --all, or open a new one with post --title.")
-        t = threads[tid]
-        _add_member(t, me, "joined")
-        _save("threads.json", threads)
-    recent = [m for m in _log() if m["thread"] == tid][-5:]
-    print(f"Joined thread '{t['title']}' ({tid}). Participants: {', '.join(_label(_load('sessions.json', {}), p) for p in t['participants'])}.")
-    if recent:
-        print("Recent posts:\n")
-        _show(_decorate(recent))
+    print(MEMBERSHIP_GONE)
 
 
-def cmd_part(a):
-    """Leave one thread when you no longer need it. Posts in it stop reaching you unless someone mentions you again."""
-    me = _me(a)
-    with _Lock():
-        threads = _load("threads.json", {})
-        tid = _find_thread(threads, a.thread)
-        if not tid:
-            sys.exit(f"Thread '{a.thread}' not found.")
-        t = threads[tid]
-        if me in t["participants"]:
-            t["participants"] = [p for p in t["participants"] if p != me]
-            t.setdefault("parted", {})[me] = _now()
-            t.setdefault("events", []).append({"ts": _now(), "who": me, "what": "left"})
-        t["busy"] = {k: v for k, v in t.get("busy", {}).items() if k != me}
-        _save("threads.json", threads)
-    print(f"Left thread '{t['title']}'.")
+cmd_part = cmd_invite = cmd_join
 
 
 def _cursor(sid):
@@ -736,25 +744,107 @@ def cmd_poll(a):
                 if t is not None and not m["quiet"] and not m.get("open"):
                     t.setdefault("busy", {})[sid] = time.time()
             _save("threads.json", threads)
-        got += _free_notices(sid)
+        got += _offer_notices(sid)
+        got += _answer_notices(sid, a.answer_minutes)
     print(json.dumps(_decorate(got), ensure_ascii=False))
 
 
-def _free_notices(sid):
-    """기다리던 자원이 비었으면(놓음·잡은 세션이 떠남) 알림 글을 만들고 대기 목록에서 뺀다. 잠금 안에서 부른다."""
-    waits = _load("waits.json", {})
-    mine = [t for t, w in waits.items() if sid in w]
-    if not mine:
+def _notice(sid, text, thread=""):
+    return {"id": "chat-" + uuid.uuid4().hex[:6], "ts": _now(), "from": "chat", "to": [sid], "kind": "notice", "text": text, "thread": thread, "wake": [sid], "quiet": False}
+
+
+def _answer_notices(sid, minutes):
+    """내가 물은 질문·요청에 받은 세션이 받은 뒤 minutes분이 지나도 답하지 않았으면, 한 번 알린다. 잠금 안에서 부른다.
+
+    기한은 보낸 시각이 아니라 받은 시각(receipts, 모드가 seen으로 적는다)부터 센다. 긴 작업 중이라 늦게 받은 시간을 답이 늦은 것으로 세지 않기 위해서다.
+    꺼져 있어 못 받은 세션은 보낼 때 이미 알렸으므로 세지 않는다(2026-11-03 사용자 결정).
+    """
+    if minutes <= 0:
         return []
+    log = _log()
+    receipts = _load("receipts.json", {})
+    nudged = _load("nudged.json", {})
+    now = time.time()
+    answered = {}
+    for m in log:
+        if m.get("reply_to") and m.get("kind") == "reply":
+            answered.setdefault(m["reply_to"], set()).add(m["from"])
+    sessions = _load("sessions.json", {})
+    threads = _load("threads.json", {})
+    out = []
+    for m in log[-500:]:
+        if m["from"] != sid or m["kind"] not in ("ask", "request") or m["id"] in nudged:
+            continue
+        got = receipts.get(m["id"], {})
+        done = answered.get(m["id"], set())
+        late = [t for t in m["to"] if t != USER and t not in done and t in got and now - got[t] > minutes * 60]
+        if not late:
+            continue
+        nudged[m["id"]] = now
+        who = ", ".join(_label(sessions, t) for t in late)
+        title = threads.get(m["thread"], {}).get("title", "")
+        so_far = [t for t in m["to"] if t in done]
+        text = f"No answer yet from {who} to your post {m['id']} in thread '{title}' ({m['thread']}). They got it over {minutes} min ago and may still be working on something else."
+        if so_far:
+            text += f" Answered so far: {', '.join(_label(sessions, t) for t in so_far)}; their answers are above."
+        text += " Wait, ask another session, or tell the user. Do not send the same question again."
+        out.append(_notice(sid, text, m["thread"]))
+    if out:
+        # 오래된 표시는 줄여 둔다. 파일이 한없이 커지지 않게 한다
+        _save("nudged.json", dict(sorted(nudged.items(), key=lambda x: x[1])[-1000:]))
+    return out
+
+
+def _held(c):
+    """잡은 표시가 아직 유효한가. 잡은 세션이 살아 있고, 마지막 연장(renewed) 뒤 LEASE가 지나지 않았다."""
+    if not _is_live(c["by"]):
+        return False
+    renewed = c.get("renewed")
+    if renewed is None:
+        try:
+            renewed = datetime.datetime.fromisoformat(c["since"]).timestamp()
+        except (KeyError, ValueError):
+            return True
+    return time.time() - renewed < LEASE
+
+
+def _waits():
+    """대기 목록: 들어온 순서의 [{sid, targets, since, offered?}]. 옛 형식({대상: [세션]})은 읽을 때 바꾼다."""
+    w = _load("waits.json", [])
+    if isinstance(w, dict):
+        groups = {}
+        for t, sids in w.items():
+            for s in sids:
+                groups.setdefault(s, []).append(t)
+        w = [{"sid": s, "targets": ts, "since": time.time()} for s, ts in groups.items()]
+    return sorted(w, key=lambda g: g["since"])
+
+
+def _offer_notices(sid):
+    """대기 순서가 온 세션에 자원을 넘긴다. 잠금 안에서 부른다.
+
+    먼저 기다린 세션부터 한 세션에만 알리고 OFFER초 동안 맡아 둔다. 순서는 claim --wait이 들어온 시각이 정하고, 세션도 사용자도 고르지 않는다.
+    차례가 된 세션이 꺼졌거나, 알림 뒤 OFFER초 안에 잡지 않으면 대기에서 빼 다음 세션에 넘긴다(2026-11-03 사용자 결정).
+    놓을 때 기다리던 세션을 전부 깨워 다시 다투게 하던 것을 대신한다.
+    """
+    waits = _waits()
+    now = time.time()
+    keep = [g for g in waits if _is_live(g["sid"]) and not (g.get("offered") and now - g["offered"] > OFFER)]
+    changed = len(keep) != len(waits)
     board = _load("board.json", {})
-    free = [t for t in mine if t not in board or board[t]["by"] == sid or not _is_live(board[t]["by"])]
-    if not free:
-        return []
-    for t in free:
-        waits[t] = [w for w in waits[t] if w != sid]
-    _save("waits.json", {t: w for t, w in waits.items() if w})
-    text = f"Now free: {', '.join(free)}. Claim before using it (claim {' '.join(free)}); if someone got there first, add --wait again."
-    return [{"id": "free-" + uuid.uuid4().hex[:6], "ts": _now(), "from": "chat", "to": [sid], "kind": "notice", "text": text, "thread": "", "wake": [sid], "quiet": False}]
+    out = []
+    for i, g in enumerate(keep):
+        if g["sid"] != sid or g.get("offered"):
+            continue
+        ahead = {t for h in keep[:i] for t in h["targets"]}
+        if any(t in ahead or (t in board and board[t]["by"] != sid and _held(board[t])) for t in g["targets"]):
+            continue
+        g["offered"] = now
+        changed = True
+        out.append(_notice(sid, f"Your turn: {', '.join(g['targets'])} free now and held for you for {OFFER // 60} minutes. Claim before using it (claim {' '.join(g['targets'])}). If you no longer need it, do nothing; it passes to the next session."))
+    if changed:
+        _save("waits.json", keep)
+    return out
 
 
 def cmd_take(a):
@@ -792,7 +882,72 @@ def cmd_yield(a):
             n += len(mine)
         if n:
             _save("threads.json", threads)
+        sessions = _load("sessions.json", {})
+        if sessions.get(sid, {}).get("in_turn"):
+            sessions[sid]["in_turn"] = False
+            _save("sessions.json", sessions)
     print(json.dumps({"released": n}))
+
+
+def cmd_seen(a):
+    """For the mod: record when this session actually got these posts. The answer deadline counts from here."""
+    sid = _me(a)
+    with _Lock():
+        receipts = _load("receipts.json", {})
+        for pid in a.posts:
+            receipts.setdefault(pid, {}).setdefault(sid, time.time())
+        if len(receipts) > 2000:
+            receipts = dict(list(receipts.items())[-2000:])
+        _save("receipts.json", receipts)
+
+
+def cmd_outbox(a):
+    """For the mod: this session's recent posts that should also go over Claude Code's own session messages.
+
+    A session in the middle of a turn reads a session message between tool calls, while the chat's own delivery waits for the turn to end (2026-11-03 시험).
+    So posts that wake a session go this way too, to a live session that is in a turn.
+    Across permission-mode classes Claude Code holds the message for approval (the desktop app drops it after five minutes), so when both classes are known and differ it is skipped.
+    A mod cannot read its permission mode today (2026-11-03 시험: classic hooks do not reach a mod), so usually neither is known; the user can turn this path off.
+    The chat's own delivery stays the sure path; the receiving mod drops whichever copy comes second.
+    """
+    me = _me(a)
+    sessions = _load("sessions.json", {})
+    mine = sessions.get(me.split(".")[0], {}).get("mode_class")
+    out = []
+    with _Lock():
+        sent = _load("sent.json", {})
+        cutoff = time.time() - 120
+        for m in _log()[-200:]:
+            if m["from"] != me or m["id"] in sent:
+                continue
+            try:
+                if datetime.datetime.fromisoformat(m["ts"]).timestamp() < cutoff:
+                    continue
+            except ValueError:
+                continue
+            sent[m["id"]] = time.time()
+            to = []
+            for t in m.get("wake", []):
+                p = sessions.get(t.split(".")[0], {})
+                differs = mine and p.get("mode_class") and p["mode_class"] != mine
+                if p.get("in_turn") and p.get("full_id") and not differs and _is_live(t):
+                    to.append(p["full_id"])
+            if to:
+                out.append({"post": m, "to": to})
+        _save("sent.json", dict(sorted(sent.items(), key=lambda x: x[1])[-500:]))
+    print(json.dumps([{**o, "post": _decorate([o["post"]])[0]} for o in out], ensure_ascii=False))
+
+
+def cmd_renew(a):
+    """For the mod: renew this session's claims while it uses tools. A claim lapses after LEASE seconds without renewal."""
+    me = _me(a).split(".")[0]
+    with _Lock():
+        board = _load("board.json", {})
+        mine = [c for c in board.values() if c["by"].split(".")[0] == me]
+        for c in mine:
+            c["renewed"] = time.time()
+        if mine:
+            _save("board.json", board)
 
 
 def _show(msgs):
@@ -826,14 +981,15 @@ def cmd_wait(a):
 
 
 # 스레드 상태는 "지금 누구 차례인가"로 정한다. 답한 쪽은 대화가 끝났는지 알 수 없으므로, 끝남은 상태가 아니라 시간으로 판정한다
-TURN_STATE = {"ask": "waiting", "request": "waiting", "comment": "waiting", "info": "info"}
+TURN_STATE = {"ask": "waiting", "request": "waiting", "comment": "waiting", "info": "info", "note": "info"}
 REPLY_STATE = {"partial": "working", "answered": "answered", "declined": "declined"}
 
 
 def _thread_states(quiet_hours=6, waiting_hours=24):
     threads = _load("threads.json", {})
     states = {}
-    for m in _log():
+    log = _log()
+    for m in log:
         if m["thread"] == m["id"]:
             states[m["id"]] = {"root": m, "posts": [], "state": TURN_STATE.get(m["kind"], "waiting"), "updated": m["ts"]}
         elif m["thread"] in states:
@@ -849,9 +1005,7 @@ def _thread_states(quiet_hours=6, waiting_hours=24):
         meta = threads.get(tid, {})
         t["id"] = tid
         t["title"] = meta.get("title") or t["root"]["text"][:30]
-        t["participants"] = meta.get("participants", [])
-        t["parted"] = meta.get("parted", {})
-        t["events"] = meta.get("events", [])
+        t["participants"] = _participants(tid, log)
         # 지금 글을 받아 처리 중인 세션들. 패널이 그 세션 옆에 "답을 쓰는 중"을 띄운다
         t["busy"] = _busy_now(meta)
         # 답 기다림: 멘션을 받고 그 뒤로 이 스레드에 아직 아무 글도 안 올린 세션. 멘션 없는 사용자 질문은 손 든 세션이 답할 때까지 열려 있다
@@ -863,7 +1017,7 @@ def _thread_states(quiet_hours=6, waiting_hours=24):
                 open_q = {"id": m["id"], "ts": m["ts"], "taker": takes.get(m["id"], "")}
             elif open_q and m["from"] == open_q["taker"]:
                 open_q = None
-            if m["kind"] in ("ask", "request", "comment") and not m.get("open"):
+            if m["kind"] in ASKING and not m.get("open"):
                 for who in m["to"]:
                     pending[who] = m["ts"]
         t["pending"] = [{"who": w, "since": s} for w, s in pending.items() if w != USER]
@@ -892,7 +1046,8 @@ def cmd_threads(a):
     for tid, t in sorted(_thread_states().items(), key=lambda x: x[1]["updated"], reverse=True):
         if not a.all and t["closed"]:
             continue
-        if not a.all and me not in t["participants"]:
+        # 내가 글을 썼거나 나를 멘션한 스레드
+        if not a.all and me not in t["participants"] and not any(me in m["to"] for m in [t["root"], *t["posts"]]):
             continue
         who = ", ".join(_label(sessions, p) for p in t["participants"])
         print(f"{tid} · {t['state']} · '{t['title']}' · {who}")
@@ -911,28 +1066,31 @@ def cmd_claim(a):
     with _Lock():
         board = _load("board.json", {})
         sessions = _load("sessions.json", {})
-        taken = [(t, board[t]) for t in targets if t in board and board[t]["by"] != me and _is_live(board[t]["by"])]
+        waits = _waits()
+        now = time.time()
+        taken = [(t, board[t]["by"]) for t in targets if t in board and board[t]["by"] != me and _held(board[t])]
+        # 대기 순서가 와서 다른 세션에 맡아 둔 자원도 잡지 못한다
+        for g in waits:
+            if g["sid"] != me and g.get("offered") and now - g["offered"] <= OFFER:
+                taken += [(t, g["sid"]) for t in targets if t in g["targets"] and t not in dict(taken)]
         if taken and not a.force:
-            who = ", ".join(f"'{t}' by {_label(sessions, c['by'])}({c['by']})" for t, c in taken)
+            who = ", ".join(f"'{t}' by {_label(sessions, by)}({by})" for t, by in taken)
             if a.wait:
-                # 기다리는 세션을 적어 둔다. 잡은 세션이 놓거나 떠나면 poll이 그 세션에 알림 한 번으로 턴을 연다.
+                # 기다리는 세션을 들어온 순서대로 적어 둔다. 차례가 오면 poll이 그 세션 하나에 알림으로 턴을 연다.
                 # 세션마다 "잡음·놓음"을 글로 써서 서로를 멘션하던 것을 대신한다(2026-11-03 사용자 결정)
-                waits = _load("waits.json", {})
-                for t, _ in taken:
-                    if me not in waits.setdefault(t, []):
-                        waits[t].append(me)
-                _save("waits.json", waits)
-                sys.exit(f"Claimed nothing: already claimed: {who}. You are on the wait list; you will get a notice when it is free. Do other work or end the turn meanwhile.")
-            sys.exit(f"Claimed nothing: already claimed: {who}. Ask that session, or add --wait to get a notice when it is free.")
+                if not any(g["sid"] == me and set(g["targets"]) == set(targets) for g in waits):
+                    waits.append({"sid": me, "targets": targets, "since": now})
+                    _save("waits.json", waits)
+                ahead = len({g["sid"] for g in waits if g["sid"] != me and set(g["targets"]) & set(targets) and g["since"] < now})
+                sys.exit(f"Claimed nothing: already claimed: {who}. You are on the wait list ({ahead} ahead of you); you get a notice when it is your turn. Do other work or end the turn meanwhile.")
+            sys.exit(f"Claimed nothing: already claimed: {who}. Ask that session, or add --wait to wait your turn.")
         for t in targets:
-            board[t] = {"by": me, "since": _now(), "note": a.note or ""}
+            board[t] = {"by": me, "since": _now(), "renewed": now, "note": a.note or ""}
         _save("board.json", board)
-        waits = _load("waits.json", {})
-        if any(me in waits.get(t, []) for t in targets):
-            for t in targets:
-                waits[t] = [w for w in waits.get(t, []) if w != me]
-            _save("waits.json", {t: w for t, w in waits.items() if w})
-    print(f"Claimed {len(targets)}: " + ", ".join(targets))
+        rest = [g for g in waits if not (g["sid"] == me and set(g["targets"]) & set(targets))]
+        if len(rest) != len(waits):
+            _save("waits.json", rest)
+    print(f"Claimed {len(targets)}: " + ", ".join(targets) + f". The claim lapses after {LEASE // 60} minutes without tool use.")
 
 
 def cmd_release(a):
@@ -955,7 +1113,7 @@ def cmd_leave(a):
     """
     me = _me(a)
     if not a.user_asked and "." not in me:
-        sys.exit("Not left. Quitting the session chat cuts this session off from every thread and session. To leave one thread, run part <thread id>. Run leave --user-asked only if the user told you in this window to quit the session chat.")
+        sys.exit("Not left. Quitting the session chat cuts this session off: no session can ask it anything. Threads have no membership, so there is nothing to leave in a thread; if you have nothing more to say there, just stop posting. Run leave --user-asked only if the user told you in this window to quit the session chat.")
     try:
         os.remove(os.path.join(ROOT, "alive", me))
     except FileNotFoundError:
@@ -965,8 +1123,7 @@ def cmd_leave(a):
         for t in [t for t, c in board.items() if c["by"].split(".")[0] == me]:
             del board[t]
         _save("board.json", board)
-        waits = _load("waits.json", {})
-        _save("waits.json", {t: [x for x in w if x.split(".")[0] != me] for t, w in waits.items() if any(x.split(".")[0] != me for x in w)})
+        _save("waits.json", [g for g in _waits() if g["sid"].split(".")[0] != me])
         sessions = _load("sessions.json", {})
         if me in sessions:
             sessions[me]["left"] = _now()
@@ -989,7 +1146,7 @@ def _dump_data(quiet_hours, waiting_hours, limit):
         p["idle"] = _ago(idle) if idle > IDLE else ""
         p.pop("recent", None)
     threads = sorted(_thread_states(quiet_hours, waiting_hours).values(), key=lambda t: t["updated"], reverse=True)[:limit]
-    board = [{"target": t, **c} for t, c in sorted(_load("board.json", {}).items()) if _is_live(c["by"])]
+    board = [{"target": t, **c} for t, c in sorted(_load("board.json", {}).items()) if _held(c)]
     # 스레드에 나오는 떠난 세션의 이름·아바타. 살아 있는 목록에는 없으므로 따로 싣는다
     names = {}
     for sid, p in _load("sessions.json", {}).items():
@@ -1152,27 +1309,29 @@ def main():
     s.add_argument("--auto", action="store_true", help="Automatic summary from the mod; does not overwrite values the session set recently")
     s.add_argument("--avatar", choices=SHAPES)
     s.add_argument("--color", choices=list(COLORS))
+    s.add_argument("--full-id", help=argparse.SUPPRESS)
     s = sub.add_parser("who", help="List live sessions")
     s.add_argument("--json", action="store_true")
     s = sub.add_parser("find", help="Find sessions to ask, with reasons")
     s.add_argument("query", help="A file path or words about the work")
-    s = sub.add_parser("post", help="Send a post. Mention recipients with --to")
-    s.add_argument("--to", help="Session IDs to mention (comma separated). Empty in a reply mentions the author being answered")
+    s = sub.add_parser("post", help="Send a post: a mention asks, a reply answers, anything else is a note")
+    s.add_argument("--to", help="Session IDs to ask (comma separated). A mention opens a turn for them, running or not")
+    s.add_argument("--thread", help="Post in this existing thread (ID or exact title) as a new post")
     s.add_argument("--open", action="store_true", help=argparse.SUPPRESS)
-    s.add_argument("--top", action="store_true", help="A new post in the thread rather than a reply (the panel's bottom box)")
-    s.add_argument("--kind", choices=KINDS, help="Defaults to reply with --reply-to, ask for a new thread")
+    s.add_argument("--top", action="store_true", help=argparse.SUPPRESS)
+    s.add_argument("--kind", choices=KINDS, help="ask or request with --to, reply with --reply-to, note otherwise (the default follows from these)")
     s.add_argument("--title", help="Title of a new thread (shown to the user)")
-    s.add_argument("--reply-to", help="ID of the post to reply to")
-    s.add_argument("--status", choices=("answered", "declined", "partial"), help="Required for reply: answered (done), partial (in progress), declined (will not do)")
+    s.add_argument("--reply-to", help="ID of the question or request this answers")
+    s.add_argument("--status", choices=("answered", "declined", "partial"), help="Required for reply: answered (done) or declined (will not do)")
     s.add_argument("--sig", help=argparse.SUPPRESS)
     s.add_argument("text")
-    s = sub.add_parser("invite", help="Add a session to a thread")
+    s = sub.add_parser("show", help="Show a thread's recent posts (by ID or exact title)")
     s.add_argument("thread")
-    s.add_argument("who")
-    s = sub.add_parser("join", help="Join a thread (by ID or exact title) and see its recent posts")
-    s.add_argument("thread")
-    s = sub.add_parser("part", help="Leave one thread when you no longer need it")
-    s.add_argument("thread")
+    s.add_argument("--last", type=int, default=8)
+    # 옛 판의 세션이 부르는 명령. 지금은 할 일이 없다고 알려 준다
+    for name in ("join", "part", "invite"):
+        s = sub.add_parser(name, help=argparse.SUPPRESS)
+        s.add_argument("rest", nargs="*")
     sub.add_parser("read", help="Read new posts")
     s = sub.add_parser("wait", help="Without the mod: wait until a post arrives (run in the background)")
     s.add_argument("--timeout", type=int, default=0)
@@ -1186,7 +1345,7 @@ def main():
     s = sub.add_parser("release", help="Release claims (--all for every one)")
     s.add_argument("targets", nargs="*")
     s.add_argument("--all", action="store_true")
-    s = sub.add_parser("leave", help="Quit the whole session chat (to leave one thread, use part)")
+    s = sub.add_parser("leave", help="Quit the whole session chat (only when the user says so)")
     s.add_argument("--user-asked", action="store_true", help="Required: the user told you in this session's own window to quit the session chat")
     s = sub.add_parser("touch", help="For the mod: record an edited file as recent")
     s.add_argument("path")
@@ -1194,9 +1353,16 @@ def main():
     s.add_argument("path")
     s = sub.add_parser("poll", help="For the mod: heartbeat and new posts")
     s.add_argument("--archive-days", type=float, default=7, help="Move threads whose last post is older than this many days to archive/ (0 keeps everything)")
+    s.add_argument("--answer-minutes", type=float, default=10, help="Tell this session once when a session it asked got the post this many minutes ago and has not answered (0 turns it off)")
     s = sub.add_parser("activity", help="For the mod: record that a user prompt or turn happened")
     s.add_argument("--user", action="store_true", help="A user prompt: also rejoins a session that had quit the chat")
+    s.add_argument("--turn", choices=("on", "off"), help="A turn started (yield clears it when it ends)")
+    s.add_argument("--mode", choices=("bypass", "prompt"), help="This session's permission-mode class")
     sub.add_parser("yield", help="For the mod: clear working marks when a turn ends")
+    s = sub.add_parser("seen", help="For the mod: record that this session got these posts")
+    s.add_argument("posts", nargs="+")
+    sub.add_parser("outbox", help="For the mod: recent posts to also send over session messages to sessions in a turn")
+    sub.add_parser("renew", help="For the mod: renew this session's claims")
     s = sub.add_parser("take", help="Claim an open user question. Only one session succeeds per question")
     s.add_argument("msg", help="ID of that question post")
     s = sub.add_parser("dump", help="State for the panel")
