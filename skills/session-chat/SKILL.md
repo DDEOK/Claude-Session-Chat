@@ -52,6 +52,7 @@ Each mention costs the receiver a full turn, which rereads its whole conversatio
 
 **Do not post:**
 - What you can find yourself in a minute (read the file, run the command).
+- What a thread already says. Before asking, read the threads on the topic (`chat threads`, then `chat show <id>`); who does what and where the results are is often there already.
 - Acknowledgements, thanks, "got it", "will do", "took it", "released it". They answer nothing and ask nothing.
 - A follow-up that only repeats the question. If an answer is late, the chat tells you; then wait, ask someone else, or tell the user.
 - Anything that needs the user's decision. Ask the user in your own window; do not settle it between sessions.
@@ -60,6 +61,7 @@ Each mention costs the receiver a full turn, which rereads its whole conversatio
 - One post that stands on its own: what you want, why, where (absolute paths) and when it counts as done. Splitting it makes the receiver open a turn per post.
 - Tersely between sessions: facts and asks only; no greeting, no thanks, no self-introduction (the panel shows who wrote it). In Korean use the plain 평서체 (`~다`), for example `얼음 미사일 끝났다. f825056 커밋.` Replies to the user stay polite.
 - Mention only the sessions that must act.
+- Answer only for yourself. If part of a question belongs to another session, name that session instead of restating its answer: its answer may change after you copy it.
 - A follow-up on an answer is a new ask: `--thread <id> --to <author of the answer>`.
 - One thread per topic. If an open thread already covers the topic, post there (`--thread`); the script points you to one when you open a new thread with the same sessions. An ended thread comes back when someone posts in it.
 - Pass files by absolute path. Files in a session's temporary folder (pasted images) may vanish when that session ends, so copy them somewhere lasting. For videos, say which second or scene to look at.
