@@ -231,6 +231,11 @@ async function sign($: any, thread: string, text: string) {
   return hmacHex(await userKey($), new TextEncoder().encode(`${thread}\n${text}`))
 }
 
+// 세션 메시지 머리말(sendOutbox)에서 글 번호를 뽑는다
+function postIdOf(text: string) {
+  return text.match(/\[Session chat · post ([0-9a-f]{8})\b/)?.[1]
+}
+
 function describe(m: Post) {
   if (m.kind === 'notice') return `- Notice from the session chat\n\n${m.text}`
   const status = m.status ? ` · ${m.status}` : ''
@@ -739,6 +744,16 @@ export const register: Register = (on, options) => {
       lastRenew = Date.now()
       void chat($, ['renew'])
     }
+    // 모아 둔 글에 이미 답하고 있으면 그 글은 읽은 것이다. 턴 끝에 다시 넣지 않는다.
+    // session.append 훅이 Claude Code 기본 플러그인(cc-plugin-sec-default) 때문에 건너뛰어지는 판이 있어, 세션 메시지로 읽은 글을 여기서도 알아본다(2026-11-03)
+    if (active && (e as any).tool === 'Bash' && held.length) {
+      for (const [, id] of String((e as any).command ?? '').matchAll(/--reply-to[ =]+([0-9a-f]{8})\b/g)) {
+        if (!id || !held.some(m => m.id === id)) continue
+        handled.add(id)
+        held = held.filter(m => m.id !== id)
+        log('answered-early', { id })
+      }
+    }
     return next(e)
   })
 
@@ -751,18 +766,31 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // 세션 메시지로 온 대화방 글은 글 번호로 한 번만 넣는다. 대화방 전달로 이미 넣은 글이면 버리고, 먼저 왔으면 대화방 전달 쪽이 건너뛴다.
-  // simplified: 승인을 기다리게 잡힌 메시지에도 이 훅이 먼저 불리는지는 시험하지 않았다. 같은 권한 모드 갈래끼리만 보내 잡힐 일을 없앴다
+  // 세션 메시지로 온 대화방 글은 글 번호로 한 번만 넣는다. 대화방 전달로 이미 넣은 글이면 여기서 버린다.
+  // 받았다고 적는 것은 여기가 아니라 대화에 실제로 들어간 때다(session.append). 이 훅은 권한 모드 판정보다 먼저 불려서,
+  // 여기서 받았다고 적으면 승인 대기로 잡혔다 버려진 글이 대화방 전달에서도 빠졌다(2026-11-03 시험)
   on('session.receive', async ($, e, next) => {
     const origin = (e as any).origin
     if (origin?.plugin === 'session-chat') {
-      const id = String((e as any).text ?? '').match(/\[Session chat · post ([0-9a-f]{8})\b/)?.[1]
-      if (id) {
-        if (handled.has(id)) return { consumed: 'session-chat: this post was already delivered' }
+      const id = postIdOf(String((e as any).text ?? ''))
+      if (id && handled.has(id)) return { consumed: 'session-chat: this post was already delivered' }
+      if (id) log('receive', { id })
+    }
+    return next(e)
+  })
+
+  // 세션 메시지가 대화에 들어가면 그 글을 받은 것으로 적는다. 대화방 전달 쪽은 모아 둔 글에서 빼고 건너뛴다.
+  // 이 훅이 건너뛰어지는 판에서는 같은 글이 턴 끝에 한 번 더 들어갈 수 있다. 이미 답한 글은 tool.call 훅이 걸러 낸다
+  on('session.append', async ($, e, next) => {
+    const m = (e as any).message
+    if (m?.type === 'user' && Array.isArray(m.content)) {
+      const text = m.content.map((b: any) => (b?.type === 'text' ? b.text : '')).join('\n')
+      const id = text.includes('[Session chat · post ') ? postIdOf(text) : undefined
+      if (id && !handled.has(id)) {
         handled.add(id)
-        held = held.filter(m => m.id !== id)
+        held = held.filter(p => p.id !== id)
         void chat($, ['seen', id])
-        log('receive', { id })
+        log('received', { id, door: (e as any).door })
       }
     }
     return next(e)
