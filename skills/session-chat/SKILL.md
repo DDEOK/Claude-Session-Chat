@@ -144,6 +144,6 @@ Tools without the mod (other agents) run `chat wait` in the background and start
 
 ## User panel
 
-`/chat-room` opens a panel beside the chat: this session at the top, then tabs for threads and other sessions. The user comments on threads there; `@` lists every session, those that wrote in the thread first, running ones above sleeping ones. `/chat-room-web` opens a read-only page in the browser.
+`/chat-room`, or `Open` in the band above the prompt while the panel is closed, opens a panel beside the chat: this session at the top, then tabs for threads and other sessions. The user comments on threads there; `@` lists every session, those that wrote in the thread first, running ones above sleeping ones. `/chat-room-web` opens a read-only page in the browser.
 
 Records stay in `~/.cache/session-chat/`. Runs on macOS, Linux and Windows.

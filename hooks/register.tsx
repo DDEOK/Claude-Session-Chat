@@ -116,6 +116,8 @@ let named = true
 let composed = false
 let composeSkipped = false
 const svgCache = new Map<string, string>()
+// 입력창 위 띠의 줄 머리 아이콘(말풍선). 띠에서 다른 줄과 같은 크기로 그린다
+const BAND_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4F9D69" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>'
 
 // 디버그 기록: 실패를 조용히 넘기던 자리마다 한 줄씩 남긴다. 세션마다 ~/.cache/session-chat/debug/<세션 ID>.jsonl에 최근 500줄만 둔다.
 // 4초마다 돌 때 바뀐 것이 있으면 파일에 쓴다. 설정 debugLog를 켰을 때만 남긴다(기본은 끔. 필요한 최소 데이터만 남기라는 공개 배포 기준에 맞췄다, 2026-11-02 사용자 결정)
@@ -381,6 +383,7 @@ async function start($: any) {
   ticker = $.clock.every(TICK_MS, () => void tick($))
   // 다시 불러온 세션이 이미 참여했던 세션이면 바로 이어서 참여한다
   if (await $.store.get(`active:${sid}`)) await activate($)
+  if (await $.store.get('paneWanted')) await openPane($).catch((err: unknown) => log('pane-reopen-error', { error: String(err).slice(0, 300) }))
 }
 
 // 사람의 첫 요청이 왔을 때 대화방에 참여한다
@@ -473,7 +476,11 @@ async function openWeb($: any) {
 async function openPane($: any) {
   await $.ui.open({ id: PANE, title: L('세션 대화방', 'Session chat') })
   paneOpen = true
+  // 열어 둔 채 끝낸 사람은 다음 세션에서도 패널을 쓴다고 보고, 다음 세션이 시작할 때 다시 연다(2026-11-04 사용자 결정)
+  await $.store.set('paneWanted', true)
   await refresh($)
+  // 입력창 위 띠의 열기 버튼을 지운다. refresh는 대화방이 바뀌었을 때만 다시 그려서 여기서 따로 부른다
+  $.ui.invalidate('ui.render')
 }
 
 // 글 속 "@세션 이름"을 멘션으로 바꾼다. 이름에 공백이 있어도 되도록, 아는 이름 전체와 긴 것부터 맞춰 본다
@@ -754,9 +761,45 @@ export const register: Register = (on, options) => {
 
   // 대화방은 돕는 기능이라, 모드가 실패해도 창 닫기·파일 수정·사람 요청을 막지 않고 그대로 통과시킨다.
   // 실패 처리는 각 훅 안에서 한다. 등록 뒤에 .catch(($, e, next) => …)를 붙였더니 디렉터리 검사가 막았다($를 맨 위 함수가 아닌 곳에 넘긴다고 본다, 2026-11-02)
-  on('ui.close', { requestId: PANE } as any, async (_$, e, next) => {
+  // 닫기 이벤트는 패널을 requestId가 아니라 id로 부른다. requestId로 맞추던 동안 이 훅은 한 번도 불리지 않았다(2026-11-04)
+  on('ui.close', { id: PANE } as any, async ($, e, next) => {
     paneOpen = false
-    return next(e)
+    // 모드를 내릴 때(세션 끝·다시 불러오기)의 닫기는 사람이 닫은 것이 아니라 기억을 바꾸지 않는다
+    // origin은 { kind: 'person' | 'plugin' | 'unload' } 꼴이다(디버그 기록으로 확인)
+    const origin = (e as any).origin
+    if (origin?.kind !== 'unload') await $.store.set('paneWanted', false)
+    log('pane-closed', { origin })
+    // 엔진이 패널을 닫은 뒤에(next 다음) 입력창 위 띠를 다시 그려야 열기 버튼이 나온다. 닫기 전에 그리면 패널이 아직 열린 것으로 보인다
+    const closed = await next(e)
+    $.ui.invalidate('ui.render')
+    return closed
+  })
+
+  // 패널이 닫혀 있으면 입력창 위 띠에 열기 버튼을 둔다. 열려 있으면 그리지 않는다.
+  // 띠는 하나라 다른 모드의 띠(theirs)를 아래에 그대로 이어 그린다
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const theirs = await next(e)
+    if ((e as any).props?.hasSurvey) return theirs
+    // 열림 여부는 모듈 변수가 아니라 엔진의 기록으로 본다. 닫는 순간 패널 그리기가 한 번 더 돌며 변수를 "열림"으로 되돌려, 닫아도 버튼이 안 나왔다(2026-11-04 캡처)
+    const open = (await $.ui.panes()).some((p: any) => p.id === PANE)
+    paneOpen = open
+    if (open) return theirs
+    const els = $.ui.resolve(e) as any
+    const { Box, Text, Button } = els
+    const desktop = (e as any).surface === 'desktop'
+    // 줄 머리 아이콘·굵은 이름·버튼. 데스크톱은 그림, 터미널은 기호 한 칸이다. 터미널은 띠 오른쪽 끝에 엔진의 접기 표시([-])가 있어 4칸을 비운다
+    const Svg = els.Svg
+    const icon = desktop && Svg ? <Svg source={BAND_ICON} alt={L('대화방', 'Chat')} width={14} height={14} /> : <Text color="suggestion">◆</Text>
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" columnGap={1} alignItems="center" paddingRight={desktop ? 0 : 4}>
+          {icon}
+          <Text bold>{L('대화방', 'Chat')}</Text>
+          <Button key="open-chat-room" label={L('열기', 'Open')} onPress={() => void openPane($)} />
+        </Box>
+        {theirs}
+      </Box>
+    )
   })
 
   on('prompt.compose', async ($, e, next) => {

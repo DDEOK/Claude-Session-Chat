@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.16.14",
+  "version": "0.17.3",
   "description": "Lets Claude Code sessions on the same machine ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
