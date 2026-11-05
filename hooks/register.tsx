@@ -63,7 +63,8 @@ let waitingHours = 24
 let archiveDays = 7
 // 물은 세션이 받은 뒤 이만큼(분) 답하지 않으면 한 번 알린다(0이면 끈다)
 let answerMinutes = 10
-// 화면 문구의 언어. 플러그인 설정 language(auto·ko·en)를 먼저 보고, auto면 Claude Code 설정의 language, 그다음 시스템 언어(LANG)로 정한다.
+// 화면 문구의 언어. 플러그인 설정 language(auto·ko·en)를 먼저 보고, auto면 Claude Code 설정의 language를 따르고, 그것도 없으면 영어다.
+// 시스템 언어(환경 변수 LANG·LC_ALL)는 읽지 않는다. 디렉터리 검사가 환경 변수 읽기를 "사용자 기기의 자격증명 사용"으로 잡았다(2026-11-05)
 // 세션이 읽는 안내·지시는 영어로 두고, 이름·하는 일·글은 사용자의 언어로 쓰게 한다
 let langPref = 'auto'
 let lang: 'ko' | 'en' = 'en'
@@ -75,12 +76,7 @@ async function detectLanguage($: any) {
     return
   }
   const setting = await $.settings.read({ key: 'language' }).catch(() => undefined)
-  if (typeof setting === 'string' && setting.trim()) {
-    lang = /^ko\b|korean|한국/i.test(setting.trim()) ? 'ko' : 'en'
-    return
-  }
-  const env = (await $.env.get('LC_ALL').catch(() => undefined)) || (await $.env.get('LANG').catch(() => undefined)) || ''
-  lang = /^ko/i.test(env) ? 'ko' : 'en'
+  lang = typeof setting === 'string' && /^ko\b|korean|한국/i.test(setting.trim()) ? 'ko' : 'en'
 }
 let promptsSince = 0
 let summarizing = false
@@ -116,8 +112,6 @@ let named = true
 let composed = false
 let composeSkipped = false
 const svgCache = new Map<string, string>()
-// 입력창 위 띠의 줄 머리 아이콘(말풍선). 띠에서 다른 줄과 같은 크기로 그린다
-const BAND_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4F9D69" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>'
 
 // 디버그 기록: 실패를 조용히 넘기던 자리마다 한 줄씩 남긴다. 세션마다 ~/.cache/session-chat/debug/<세션 ID>.jsonl에 최근 500줄만 둔다.
 // 4초마다 돌 때 바뀐 것이 있으면 파일에 쓴다. 설정 debugLog를 켰을 때만 남긴다(기본은 끔. 필요한 최소 데이터만 남기라는 공개 배포 기준에 맞췄다, 2026-11-02 사용자 결정)
@@ -375,7 +369,8 @@ async function start($: any) {
   if (out.exitCode === 0) root = JSON.parse(out.stdout).root
   pluginVersion = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).then((s: string) => JSON.parse(s).version ?? '').catch(() => '')
   // 아이콘 그림을 모두 미리 읽어 둔다. 자동 완성 목록은 기다리지 않고(동기로) 그려서, 한 번도 그린 적 없는 모양은 그림 대신 빈 점이 나왔다(2026-11-03 캡처)
-  for (const shape of ['spinner', 'user', 'terminal', 'bolt', 'leaf', 'book', 'gear', 'star', 'wave', 'cube']) {
+  // chat은 입력창 위 띠의 말풍선이다. 그림을 코드 안 문자열로 두면 SVG 이름공간 주소를 디렉터리 검사가 원격 주소로 읽어 파일로 뺐다
+  for (const shape of ['spinner', 'chat', 'user', 'terminal', 'bolt', 'leaf', 'book', 'gear', 'star', 'wave', 'cube']) {
     svgCache.set(shape, await $.fs.read(`${$.plugin.root}/avatars/${shape}.svg`).catch(() => ''))
   }
   log('start', { plugin: $.plugin.root, version: pluginVersion, quietHours, waitingHours })
@@ -414,7 +409,8 @@ async function summarize($: any) {
     const r = isLong ? await $.model.complete({ model: 'haiku', prompt: await shortContext($), maxTokens: 300 }) : await $.model.fork({ prompt: SUMMARY_PROMPT })
     const u = r.usage ?? {}
     if (!isLong) lastForkTokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
-    if (root) await $.fs.write(`${root}/summary-usage/${sid}-${Date.now()}.json`, JSON.stringify({ at: new Date().toISOString(), via: isLong ? 'haiku' : 'fork', usage: r.usage, reason: r.reason }))
+    // 요약 비용 측정 기록. 디버그 기록처럼 debugLog를 켰을 때만 남긴다(필요한 최소 데이터만 남긴다는 배포 기준, 2026-11-05)
+    if (root && debugLog) await $.fs.write(`${root}/summary-usage/${sid}-${Date.now()}.json`, JSON.stringify({ at: new Date().toISOString(), via: isLong ? 'haiku' : 'fork', usage: r.usage, reason: r.reason }))
     if (!r.isAnswered) {
       log('summary-unanswered', { via: isLong ? 'haiku' : 'fork', reason: r.reason, status: r.status })
       return
@@ -789,7 +785,8 @@ export const register: Register = (on, options) => {
     const desktop = (e as any).surface === 'desktop'
     // 줄 머리 아이콘·굵은 이름·버튼. 데스크톱은 그림, 터미널은 기호 한 칸이다. 터미널은 띠 오른쪽 끝에 엔진의 접기 표시([-])가 있어 4칸을 비운다
     const Svg = els.Svg
-    const icon = desktop && Svg ? <Svg source={BAND_ICON} alt={L('대화방', 'Chat')} width={14} height={14} /> : <Text color="suggestion">◆</Text>
+    const bandIcon = svgCache.get('chat')
+    const icon = desktop && Svg && bandIcon ? <Svg source={bandIcon} alt={L('대화방', 'Chat')} width={14} height={14} /> : <Text color="suggestion">◆</Text>
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" columnGap={1} alignItems="center" paddingRight={desktop ? 0 : 4}>

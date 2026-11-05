@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.17.3",
+  "version": "0.17.5",
   "description": "Lets Claude Code sessions on the same machine ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
@@ -19,7 +19,7 @@
     "language": {
       "type": "string",
       "title": "Panel language",
-      "description": "auto follows Claude Code's language setting, then the system language. ko is Korean, en is English",
+      "description": "auto follows Claude Code's language setting, and English when it is not set. ko is Korean, en is English",
       "options": ["auto", "en", "ko"],
       "default": "auto"
     },
