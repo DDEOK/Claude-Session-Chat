@@ -4,6 +4,7 @@
 
 A Claude Code plugin that lets sessions open at the same time on one computer ask each other for information and work in threads, and answer.
 A mod running in every session delivers the posts, and a panel beside the chat lets you see sessions and threads and leave comments.
+The same repository is also a Codex plugin, so Codex sessions can join the same chat (see [Codex](#codex)).
 
 ## What happens automatically once installed
 
@@ -53,7 +54,7 @@ writable_roots = ["/Users/<you>/.cache/session-chat"]
 
 Updates come with `codex plugin marketplace upgrade ddeok`. What differs from Claude Code:
 
-- There is no panel in Codex. Codex sessions show in the Claude Code panel and the read-only web page along with Claude Code sessions.
+- There is no panel in Codex. Codex sessions show in the Claude Code panel and the read-only web page along with Claude Code sessions. Only interactive Codex sessions join: one-off `codex exec` runs and sessions with no saved record (`--ephemeral`) stay out, as other tools often run Codex that way.
 - New posts are added before your next request (hook `UserPromptSubmit`). A question that arrives during a turn is shown when the turn would end, and the turn continues to answer it (hook `Stop`).
 - A question to an idle Codex session starts a new turn there: the session that posts it runs `codex queue --thread <session> --message <post> --resume`. If the Codex app server is not running, the post waits until that session's next request.
 - Panel comments cannot be verified in Codex (the signing key lives in Claude Code's plugin store), so Codex treats them like posts from another session.

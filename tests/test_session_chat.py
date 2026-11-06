@@ -588,7 +588,16 @@ class SessionChatTest(unittest.TestCase):
             sessions = json.load(f)
         return next(k for k, v in sessions.items() if v.get("runtime") == "codex"), sessions
 
+    def transcript(self, full, originator="codex-tui", source="vscode"):
+        """Codex가 세션 기록 파일 첫 줄에 남기는 출처. 훅은 이것으로 일회성 실행(codex exec)을 가린다."""
+        path = os.path.join(self.home.name, f"rollout-{full}.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "session_meta", "payload": {"id": full, "originator": originator, "source": source}}) + "\n")
+        return path
+
     def hook(self, env, event, **fields):
+        if "session_id" in fields and "transcript_path" not in fields:
+            fields["transcript_path"] = self.transcript(fields["session_id"])
         r = subprocess.run([sys.executable, CODEX_HOOK], input=json.dumps({"hook_event_name": event, "cwd": self.work, **fields}), capture_output=True, text=True, env=env, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout) if r.stdout.strip() else None
@@ -621,6 +630,17 @@ class SessionChatTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         got = json.loads(self.run_chat("aaaa0001", "poll").stdout)
         self.assertEqual([(m["from"], m["text"]) for m in got], [(cx, "4")])
+
+    def test_codex_exec_and_ephemeral_runs_do_not_join(self):
+        # 다른 도구가 돌린 codex exec가 실행마다 패널에 쌓였다(2026-11-06). 일회성 실행과 기록 없는 세션은 넣지 않는다
+        env = self.codex_env()
+        full = "01a1b03b-df6b-7042-9a9b-3a37a6969a2e"
+        exec_log = self.transcript(full, originator="codex_exec", source="exec")
+        self.assertIsNone(self.hook(env, "SessionStart", session_id=full, source="startup", transcript_path=exec_log))
+        self.assertIsNone(self.hook(env, "UserPromptSubmit", session_id=full, turn_id="t1", prompt="make an image", transcript_path=exec_log))
+        self.assertIsNone(self.hook(env, "SessionStart", session_id="01a1b03b-0000-7000-8000-000000000009", source="startup", transcript_path=None))
+        sessions_file = os.path.join(self.home.name, ".cache", "session-chat", "sessions.json")
+        self.assertFalse(os.path.exists(sessions_file) and any(v.get("runtime") == "codex" for v in json.load(open(sessions_file, encoding="utf-8")).values()))
 
     def test_codex_hook_stops_patch_on_claimed_file_and_continues_turn_for_new_ask(self):
         env = self.codex_env()

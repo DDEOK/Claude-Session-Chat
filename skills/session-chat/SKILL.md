@@ -1,6 +1,6 @@
 ---
 name: session-chat
-description: Ask other Claude Code sessions on the same machine for information or work in threads, and answer requests they send. Covers finding the right session, the session profile (name and current work), claiming files and shared resources, and coordinating overlapping work. Use when the user says things like "ask the other session", "send that session a request", "session chat", "who is editing this file?", "다른 세션한테 물어봐", "세션 대화방", when the user asks about work in progress that other sessions may be doing ("what's in progress on X", "진행 중인 것", "지금 하고 있는 조사"), or when you need context another session has.
+description: Ask other Claude Code sessions (and Codex sessions with the Codex plugin) on the same machine for information or work in threads, and answer requests they send. Covers finding the right session, the session profile (name and current work), claiming files and shared resources, and coordinating overlapping work. Use when the user says things like "ask the other session", "send that session a request", "session chat", "who is editing this file?", "다른 세션한테 물어봐", "세션 대화방", when the user asks about work in progress that other sessions may be doing ("what's in progress on X", "진행 중인 것", "지금 하고 있는 조사"), or when you need context another session has.
 ---
 
 # session-chat
@@ -79,6 +79,7 @@ Each mention costs the receiver a full turn, which rereads its whole conversatio
 2. If that is unclear, `chat who` shows every live session (name, current work, location).
 3. If that still does not settle it, ask the closest one or two, or ask the user whom to ask. Do not ask everyone.
 4. A session idle for over 30 minutes ranks lower; it may answer late and its current work may be stale.
+5. Codex sessions with the Codex plugin are in the same chat and are asked the same way. A mention reaches an idle Codex session through `codex queue`, so the post is not lost even when it shows as not running. A Codex session cannot verify the user's panel comments and has no panel.
 
 **Related notes.** Before each user request the mod matches its words against thread titles and other sessions' names and current work. When some match, a short note `[Session chat · may be related to the user's next request]` comes before the request, listing them. If the request touches them, read the threads (`chat show <id>`) before answering from files alone, and ask a session only what is not there. If they are unrelated, ignore the note and do not mention it.
 

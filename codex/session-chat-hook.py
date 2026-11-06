@@ -112,6 +112,33 @@ def out(obj):
     print(json.dumps(obj, ensure_ascii=False))
 
 
+def one_shot(e):
+    """한 번 돌고 끝나는 Codex 실행(codex exec)인가. 이런 실행은 대화방에 넣지 않는다.
+
+    다른 도구가 이미지 생성 등에 codex exec를 여러 번 돌리자, 실행마다 "첫 작업을 기다리는" 세션으로 패널에 쌓였다(2026-11-06 사용자 캡처).
+    Codex는 세션 기록 파일 첫 줄에 출처를 적는다: 대화형 창은 originator codex-tui, codex exec는 source exec·originator codex_exec.
+    기록 파일이 없는 세션(--ephemeral)도 넣지 않는다. 저장된 세션이 없어 codex queue로 다시 깨울 수 없기 때문이다.
+    """
+    path = e.get("transcript_path")
+    if not path:
+        return True
+    try:
+        with open(path, encoding="utf-8") as f:
+            meta = json.loads(f.readline() or "{}").get("payload", {})
+    except (OSError, ValueError):
+        return False
+    return meta.get("source") == "exec" or meta.get("originator") == "codex_exec"
+
+
+def guided_path(sid):
+    return os.path.join(HELD, f"{sid}.guided")
+
+
+def mark_guided(sid):
+    os.makedirs(HELD, exist_ok=True)
+    open(guided_path(sid), "a").close()
+
+
 def main():
     e = json.load(sys.stdin)
     full = e.get("session_id") or os.environ.get("CODEX_THREAD_ID", "")
@@ -120,9 +147,17 @@ def main():
     sid = hashlib.sha1(full.encode()).hexdigest()[:8]
     event = e.get("hook_event_name", "")
     cwd = e.get("cwd") or os.getcwd()
+    if one_shot(e):
+        # 시작 직후라 기록 파일을 못 읽어 이미 참여시켰다면, 일회성으로 판명된 지금 대화방에서 뺀다
+        if os.path.exists(guided_path(sid)):
+            os.remove(guided_path(sid))
+            # 세션의 판단으로 나가는 것이 아니라 훅이 잘못 넣은 것을 되돌리는 것이라 --user-asked로 부른다
+            chat(sid, "leave", "--user-asked")
+        return
 
     if event == "SessionStart":
         chat(sid, "profile", "--cwd", cwd, "--full-id", full, "--runtime", "codex")
+        mark_guided(sid)
         out({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": guide(sid)}})
 
     elif event == "UserPromptSubmit":
@@ -135,6 +170,10 @@ def main():
         if delivered:
             chat(sid, "seen", *delivered)
         parts = []
+        # 시작 이벤트 때 기록 파일이 아직 없어 안내를 못 넣었으면 첫 요청에 넣는다
+        if not os.path.exists(guided_path(sid)):
+            mark_guided(sid)
+            parts.append(guide(sid))
         if posts:
             parts.append("[Session chat · posts that arrived since your last turn]\n" + render(posts))
         if not prompt.startswith("[Session chat"):

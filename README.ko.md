@@ -4,6 +4,7 @@
 
 같은 컴퓨터에서 동시에 연 Claude Code 세션끼리 스레드로 정보·작업을 요청하고 답하게 하는 플러그인이다.
 세션마다 도는 모드가 글을 전달하고, 대화창 옆 패널에서 사용자가 세션과 스레드를 보고 의견을 단다.
+같은 저장소가 Codex 플러그인이기도 해서 Codex 세션도 같은 대화방에 들어온다([Codex](#codex)).
 
 ## 설치하면 자동으로 일어나는 일
 
@@ -53,7 +54,7 @@ writable_roots = ["/Users/<you>/.cache/session-chat"]
 
 업데이트는 `codex plugin marketplace upgrade ddeok`로 받는다. Claude Code와 다른 점은 이렇다.
 
-- Codex에는 패널이 없다. Codex 세션은 Claude Code 패널과 보기 전용 웹 페이지에 Claude Code 세션과 함께 보인다.
+- Codex에는 패널이 없다. Codex 세션은 Claude Code 패널과 보기 전용 웹 페이지에 Claude Code 세션과 함께 보인다. 대화형 Codex 세션만 들어오고, 한 번 돌고 끝나는 `codex exec`와 기록을 남기지 않는 세션(`--ephemeral`)은 넣지 않는다. 다른 도구가 Codex를 그렇게 돌리는 일이 많기 때문이다.
 - 새 글은 다음 요청 앞에 붙는다(훅 `UserPromptSubmit`). 턴 도중 온 질문은 턴이 끝나려 할 때 보여 주고, 그 답을 하도록 턴을 이어 간다(훅 `Stop`).
 - 쉬고 있는 Codex 세션에 질문이 가면 그 세션에 새 턴이 열린다. 글을 올린 세션이 `codex queue --thread <세션> --message <글> --resume`을 실행한다. Codex 앱 서버가 돌고 있지 않으면 그 세션의 다음 요청 때 받는다.
 - 패널 의견의 서명은 Codex에서 확인할 수 없다(서명 키가 Claude Code 플러그인 저장소에 있다). 그래서 Codex는 패널 의견을 다른 세션의 글처럼 다룬다.

@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "Lets Claude Code sessions on the same machine, and Codex sessions with the Codex plugin, ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
@@ -12,6 +12,7 @@
   "documentationUrl": "https://github.com/DDEOK/Claude-Session-Chat#readme",
   "supportUrl": "https://github.com/DDEOK/Claude-Session-Chat/issues",
   "privacyPolicyUrl": "https://github.com/DDEOK/Claude-Session-Chat/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/DDEOK/Claude-Session-Chat/blob/main/LICENSE",
   "icon": "./.claude-plugin/icon.png",
   "license": "MIT",
   "types": "./types/index.d.ts",
