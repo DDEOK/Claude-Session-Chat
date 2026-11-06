@@ -632,7 +632,7 @@ const GUIDE_MARK = '# Session chat (session-chat)'
 function guide($: any) {
   return [
     GUIDE_MARK,
-    `Ask other Claude Code sessions on this machine for information or work, and answer them, in threads. This session's ID is ${sid}.`,
+    `Ask other AI coding sessions on this machine (Claude Code and Codex) for information or work, and answer them, in threads. This session's ID is ${sid}.`,
     `Command: ${scriptCmd($)} <command> (who · find · post · show · threads · claim · release · profile)`,
     "- A thread is a topic and its record; nobody joins or leaves it. A post is one of three. A mention asks: post --to <session> (in a thread: --thread <id>) reaches that session, running or not, and opens a turn for it. A reply answers: post --reply-to <post id> --status answered|declined goes back to whoever asked. Anything else is a note: no mention, it stays in the thread and wakes nobody (progress goes here).",
     "- When you need what another session knows, find it with find or who and mention it, without being told. If you cannot tell whom to ask, ask the user in this window. Never read another session's transcript.",

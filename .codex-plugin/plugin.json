@@ -1,0 +1,29 @@
+{
+  "name": "session-chat",
+  "version": "0.18.0",
+  "description": "Lets Claude Code and Codex sessions on the same machine ask each other for information and work in threads.",
+  "author": {
+    "name": "DDEOK",
+    "url": "https://github.com/DDEOK"
+  },
+  "homepage": "https://github.com/DDEOK/Claude-Session-Chat",
+  "repository": "https://github.com/DDEOK/Claude-Session-Chat",
+  "license": "MIT",
+  "keywords": ["sessions", "multi-session", "chat", "coordination"],
+  "skills": "./codex/skills/",
+  "hooks": "./codex/hooks.json",
+  "interface": {
+    "displayName": "Session Chat",
+    "shortDescription": "Ask other Claude Code and Codex sessions in threads",
+    "longDescription": "Sessions on the same machine, Claude Code and Codex alike, share one chat under ~/.cache/session-chat. A session asks another by mentioning it in a thread, the other answers with a reply, and file and resource claims keep two sessions from editing the same thing. In Codex, hooks add new posts before your request, and a question that arrives while a session is idle starts a new turn there through codex queue.",
+    "developerName": "DDEOK",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/DDEOK/Claude-Session-Chat",
+    "privacyPolicyURL": "https://github.com/DDEOK/Claude-Session-Chat/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/DDEOK/Claude-Session-Chat/blob/main/LICENSE",
+    "defaultPrompt": ["Who else is working on this machine right now?", "Ask the other session where its results are."],
+    "logo": "./.claude-plugin/icon.png",
+    "composerIcon": "./.claude-plugin/icon.png"
+  }
+}

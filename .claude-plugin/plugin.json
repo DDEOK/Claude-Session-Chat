@@ -1,8 +1,8 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.17.5",
-  "description": "Lets Claude Code sessions on the same machine ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
+  "version": "0.18.0",
+  "description": "Lets Claude Code sessions on the same machine, and Codex sessions with the Codex plugin, ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
     "url": "https://github.com/DDEOK"

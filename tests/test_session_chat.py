@@ -9,9 +9,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 SCRIPT = os.path.join(os.path.dirname(__file__), "..", "scripts", "session-chat.py")
+CODEX_HOOK = os.path.join(os.path.dirname(__file__), "..", "codex", "session-chat-hook.py")
 
 
 class SessionChatTest(unittest.TestCase):
@@ -570,6 +572,73 @@ class SessionChatTest(unittest.TestCase):
         self.run_chat("aaaa0001", "profile", "--auto", "--title", "엉뚱한 이름", "--doing", "자동 요약")
         who = json.loads(self.run_chat("aaaa0001", "who", "--json").stdout)
         self.assertEqual(who["aaaa0001"]["title"], "주간 할 일 목록")
+
+    def codex_env(self):
+        """가짜 codex를 PATH 앞에 둔다. 받은 인자를 한 줄씩 기록해 codex queue 호출을 확인한다."""
+        bin_dir = os.path.join(self.home.name, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        fake = os.path.join(bin_dir, "codex")
+        with open(fake, "w") as f:
+            f.write(f"#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"{self.home.name}/codex-calls\"\n")
+        os.chmod(fake, 0o755)
+        return {**self.env, "PATH": bin_dir + os.pathsep + self.env.get("PATH", "")}
+
+    def codex_sid(self):
+        with open(os.path.join(self.home.name, ".cache", "session-chat", "sessions.json"), encoding="utf-8") as f:
+            sessions = json.load(f)
+        return next(k for k, v in sessions.items() if v.get("runtime") == "codex"), sessions
+
+    def hook(self, env, event, **fields):
+        r = subprocess.run([sys.executable, CODEX_HOOK], input=json.dumps({"hook_event_name": event, "cwd": self.work, **fields}), capture_output=True, text=True, env=env, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout) if r.stdout.strip() else None
+
+    def test_codex_session_joins_gets_posts_and_is_woken_by_codex_queue(self):
+        # Codex 세션: 시작 훅이 참여시키고, 질문은 codex queue로 깨우며, 요청 앞에 새 글을 붙인다(2026-11-06)
+        env = self.codex_env()
+        full = "01a1b037-3e48-7303-829b-1f47ee40713b"
+        out = self.hook(env, "SessionStart", session_id=full, source="startup")
+        self.assertIn("# Session chat (session-chat)", out["hookSpecificOutput"]["additionalContext"])
+        cx, sessions = self.codex_sid()
+        self.assertEqual(sessions[cx]["full_id"], full)
+        self.join("aaaa0001", "묻는 세션")
+        r = subprocess.run([sys.executable, SCRIPT, "--id", "aaaa0001", "post", "--to", cx, "--title", "Codex에게", "2+2는?"], capture_output=True, text=True, env=env, encoding="utf-8")
+        self.assertEqual(json.loads(r.stdout)["offline"], [])
+        ask = json.loads(r.stdout)["id"]
+        for _ in range(50):
+            if os.path.exists(os.path.join(self.home.name, "codex-calls")):
+                break
+            time.sleep(0.1)
+        with open(os.path.join(self.home.name, "codex-calls"), encoding="utf-8") as f:
+            calls = f.read().split("\n")
+        self.assertEqual(calls[:3], ["queue", "--thread", full])
+        self.assertIn("--resume", calls)
+        # 요청 앞에 붙이되, codex queue로 이미 요청에 들어온 글은 다시 붙이지 않는다
+        queued = self.hook(env, "UserPromptSubmit", session_id=full, turn_id="t1", prompt=f"[Session chat · thread 'Codex에게' ({ask}) · post {ask} from 묻는 세션 (aaaa0001)]\n2+2는?")
+        self.assertIsNone(queued)
+        # Codex 셸에서는 CODEX_THREAD_ID로 자기 ID를 찾는다. Claude Code 안에서 띄워 CLAUDE_CODE_SESSION_ID를 물려받아도 Codex 쪽이 먼저다
+        r = subprocess.run([sys.executable, SCRIPT, "post", "--reply-to", ask, "--status", "answered", "4"], capture_output=True, text=True, env={**env, "CODEX_THREAD_ID": full, "CLAUDE_CODE_SESSION_ID": "ffff0000-claude"}, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = json.loads(self.run_chat("aaaa0001", "poll").stdout)
+        self.assertEqual([(m["from"], m["text"]) for m in got], [(cx, "4")])
+
+    def test_codex_hook_stops_patch_on_claimed_file_and_continues_turn_for_new_ask(self):
+        env = self.codex_env()
+        full = "01a1b03b-3fe7-7ba3-9985-b419021bfade"
+        self.hook(env, "SessionStart", session_id=full, source="startup")
+        self.join("aaaa0001", "잡은 세션")
+        self.run_chat("aaaa0001", "claim", self.file)
+        patch = f"*** Begin Patch\n*** Update File: {os.path.basename(self.file)}\n@@\n-a\n+b\n*** End Patch"
+        out = self.hook(env, "PreToolUse", session_id=full, turn_id="t1", tool_name="apply_patch", tool_input={"command": patch})
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("aaaa0001", out["hookSpecificOutput"]["permissionDecisionReason"])
+        # 턴 도중 온 질문은 끝내지 말고 답하게 한다. 이어 간 턴(stop_hook_active)에서는 다시 막지 않는다
+        cx, _ = self.codex_sid()
+        subprocess.run([sys.executable, SCRIPT, "--id", "aaaa0001", "post", "--to", cx, "--title", "도중 질문", "지금 뭐 해?"], capture_output=True, env=env)
+        out = self.hook(env, "Stop", session_id=full, turn_id="t1", stop_hook_active=False)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("지금 뭐 해?", out["reason"])
+        self.assertIsNone(self.hook(env, "Stop", session_id=full, turn_id="t1", stop_hook_active=True))
 
 
 if __name__ == "__main__":

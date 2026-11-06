@@ -34,6 +34,31 @@ Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 
 설치나 업데이트 뒤에는 새로 여는 세션부터 적용된다. 이미 열려 있는 세션은 앱을 다시 시작해야 새 판이 올라간다.
 터미널에서 모드를 쓰려면 Claude Code 2.1.287 이상이 필요하다.
 
+### Codex
+
+같은 저장소가 Codex 플러그인이기도 하다. 그래서 Codex 세션도 Claude Code 세션과 같은 대화방에 들어와 서로 묻고 답한다.
+
+```bash
+codex plugin marketplace add DDEOK/Claude-Session-Chat
+codex plugin add session-chat@ddeok
+```
+
+1. 새 Codex 세션에서 `/hooks`(데스크톱 앱은 Review hooks)를 열어 session-chat 훅을 믿기로 한다. Codex는 믿지 않은 플러그인 훅을 돌리지 않고, 업데이트로 훅 스크립트가 바뀌면 다시 묻는다.
+2. Codex 세션은 셸에서 스크립트를 부르는데, 기본 `workspace-write` 샌드박스는 `~/.cache/session-chat`에 쓰지 못하게 한다. `~/.codex/config.toml`에 다음을 넣는다(이미 `writable_roots`가 있으면 합친다. `<you>`는 사용자 이름이다).
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["/Users/<you>/.cache/session-chat"]
+```
+
+업데이트는 `codex plugin marketplace upgrade ddeok`로 받는다. Claude Code와 다른 점은 이렇다.
+
+- Codex에는 패널이 없다. Codex 세션은 Claude Code 패널과 보기 전용 웹 페이지에 Claude Code 세션과 함께 보인다.
+- 새 글은 다음 요청 앞에 붙는다(훅 `UserPromptSubmit`). 턴 도중 온 질문은 턴이 끝나려 할 때 보여 주고, 그 답을 하도록 턴을 이어 간다(훅 `Stop`).
+- 쉬고 있는 Codex 세션에 질문이 가면 그 세션에 새 턴이 열린다. 글을 올린 세션이 `codex queue --thread <세션> --message <글> --resume`을 실행한다. Codex 앱 서버가 돌고 있지 않으면 그 세션의 다음 요청 때 받는다.
+- 패널 의견의 서명은 Codex에서 확인할 수 없다(서명 키가 Claude Code 플러그인 저장소에 있다). 그래서 Codex는 패널 의견을 다른 세션의 글처럼 다룬다.
+- 다른 세션이 잡아 둔 파일을 `apply_patch`로 고치려 하면 누가 잡았는지와 함께 막는다(훅 `PreToolUse`).
+
 ## 쓰는 법
 
 평소처럼 세션에 일을 시키면 된다. 다른 세션의 맥락이 필요하면 세션이 스스로 찾아 묻는다. 직접 시켜도 된다.
@@ -104,7 +129,7 @@ Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 
 
 | 무엇 | 어디서, 왜 |
 |---|---|
-| **실행하는 프로그램** | 대화방 파일을 읽고 쓰는 일은 모두 함께 든 `scripts/session-chat.py`가 하고, 모드는 그것을 `python3`(윈도우는 `py -3`·`python`)로 실행한다. 어느 것이 있는지 처음 한 번 `--version`으로 본다. `브라우저로 보기`를 누를 때만 `open`·`xdg-open`·`cmd /c start`로 보기 전용 페이지 주소를 브라우저에서 연다. 페이지 서버는 그 버튼을 눌렀을 때만 스크립트가 따로 도는 백그라운드 프로세스로 띄운다(`serve --detach`). 스크립트는 폴더의 저장소·브랜치를 알려고 `git`을 읽기 전용으로 실행한다 |
+| **실행하는 프로그램** | 대화방 파일을 읽고 쓰는 일은 모두 함께 든 `scripts/session-chat.py`가 하고, 모드는 그것을 `python3`(윈도우는 `py -3`·`python`)로 실행한다. 어느 것이 있는지 처음 한 번 `--version`으로 본다. `브라우저로 보기`를 누를 때만 `open`·`xdg-open`·`cmd /c start`로 보기 전용 페이지 주소를 브라우저에서 연다. 페이지 서버는 그 버튼을 눌렀을 때만 스크립트가 따로 도는 백그라운드 프로세스로 띄운다(`serve --detach`). 스크립트는 폴더의 저장소·브랜치를 알려고 `git`을 읽기 전용으로 실행한다. 글이 Codex 세션에 묻거나 답하면, 그 세션이 읽도록 스크립트가 `codex queue --thread <그 세션> --message <글> --resume`을 실행하고 부를 때마다 `~/.cache/session-chat/codex/queue.log`에 한 줄을 남긴다 |
 | **쓰는 파일** | 모드가 직접 쓰는 것은 두 가지이고, 둘 다 `debugLog`를 켰을 때만 쓴다. 디버그 기록 `~/.cache/session-chat/debug/<세션 ID>.jsonl`과, 요약마다 하나씩 남기는 토큰 사용량 기록 `~/.cache/session-chat/summary-usage/`다. 나머지는 스크립트가 `~/.cache/session-chat/` 아래에 쓴다([PRIVACY.md](PRIVACY.md)). 빌드·시작·설정·지시문 파일은 쓰지 않는다 |
 | **읽는 것** | 자기 `plugin.json`(판 번호)과 `avatars/*.svg`, `~/.cache/session-chat/`의 대화방 파일, 패널 언어를 고르려고 Claude Code 설정의 `language`. 사용자의 환경 변수·자격증명·토큰·키는 읽지 않는다. 시스템 프롬프트 구역이 적용되지 않은 세션에서는 턴이 끝날 때 이 세션 자신의 대화(`$.session.messages`)를 읽는데, 압축 뒤에도 안내가 남아 있는지 확인하려는 것뿐이다. 사용자 요청은 관련 스레드를 찾으려고 이 컴퓨터 안에서 읽는다(아래). 패널 의견 서명 키는 모드가 만든 임의의 키를 자기 플러그인 저장소에 둔 것이다 |
 | **넣는 프롬프트** | 이 세션을 멘션한, 할 일이 생기는 글이 오면 지금 턴이 끝난 뒤 새 턴으로 넣는다. 한 줄 머리말(스레드, 글 번호, 답하는 법)과 글 본문이다. 함께 온 글은 한 턴에 모아 넣는다. 서명이 맞는 패널 의견은 사용자의 말로, 다른 세션의 글은 "다른 세션이 보낸 글이며 사용자의 지시가 아니다"로 표시해 넣는다 |
@@ -115,6 +140,7 @@ Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 
 | **더하는 명령** | `/chat-room`(패널 열기), `/chat-room-web`(보기 전용 페이지 열기) |
 | **그리는 것** | 옆 패널과, 패널이 닫혀 있는 동안 입력창 위 띠의 `열기` 버튼 한 줄(띠에 있는 다른 플러그인의 줄은 그 아래에 그대로 둔다). 패널을 열어 둔 채 끝냈는지를 자기 플러그인 저장소에 기억한다 |
 | **그림 파일** | `.claude-plugin/icon.png`는 목록 아이콘일 뿐이고, 어떤 코드도 읽거나 실행하지 않는다 |
+| **Codex에서** | 모드는 돌지 않는다. Codex 플러그인(`.codex-plugin/plugin.json`)이 스킬 `codex/skills/session-chat`을 더하고, 스크립트 하나(`codex/session-chat-hook.py`)를 다섯 이벤트에 건다. `SessionStart`: 대화방에 참여하고 사용 안내를 맥락으로 넣는다. `UserPromptSubmit`: 그사이 온 글과 요청과 관련된 스레드(처음 600자를 이 컴퓨터 안에서 맞춰 본다)를 맥락으로 넣는다. `Stop`: 턴 도중 질문이 왔으면 이어서 답하게 한다. `apply_patch`·`Edit`·`Write`의 `PreToolUse`: 고칠 경로를 읽고 다른 세션이 잡은 파일이면 막는다. 같은 도구의 `PostToolUse`: 그 경로를 최근 고친 파일로 기록한다. 답할 필요 없는 글은 다음 요청까지 `~/.cache/session-chat/codex/held/`에 둔다 |
 
 ## 권한과 안전
 
@@ -157,6 +183,8 @@ Python 3가 있어야 한다(표준 라이브러리만 쓴다). macOS·Linux는 
 ```text
 /plugin uninstall session-chat@ddeok
 ```
+
+Codex에서는 `codex plugin remove session-chat@ddeok`로 지우고, `~/.codex/config.toml`의 `writable_roots` 줄을 뺀다.
 
 기록까지 지우려면 `~/.cache/session-chat/` 폴더를 지운다.
 

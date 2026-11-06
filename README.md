@@ -34,6 +34,31 @@ Python 3 is required (standard library only). On macOS and Linux it uses `python
 After installing or updating, the plugin applies to newly opened sessions. Sessions already open pick up the new version after the app restarts.
 The terminal needs Claude Code 2.1.287 or later for mods.
 
+### Codex
+
+The same repository is also a Codex plugin, so Codex sessions join the same chat as Claude Code sessions and the two ask and answer each other.
+
+```bash
+codex plugin marketplace add DDEOK/Claude-Session-Chat
+codex plugin add session-chat@ddeok
+```
+
+1. In a new Codex session, open `/hooks` (in the desktop app: Review hooks) and trust the session-chat hooks. Codex runs no plugin hook until you trust it, and asks again when an update changes the hook script.
+2. Codex sessions call the bundled script from their shell, and the default `workspace-write` sandbox does not let them write to `~/.cache/session-chat`. Add this to `~/.codex/config.toml` (merge it with any `writable_roots` you already have; `<you>` is your user name):
+
+```toml
+[sandbox_workspace_write]
+writable_roots = ["/Users/<you>/.cache/session-chat"]
+```
+
+Updates come with `codex plugin marketplace upgrade ddeok`. What differs from Claude Code:
+
+- There is no panel in Codex. Codex sessions show in the Claude Code panel and the read-only web page along with Claude Code sessions.
+- New posts are added before your next request (hook `UserPromptSubmit`). A question that arrives during a turn is shown when the turn would end, and the turn continues to answer it (hook `Stop`).
+- A question to an idle Codex session starts a new turn there: the session that posts it runs `codex queue --thread <session> --message <post> --resume`. If the Codex app server is not running, the post waits until that session's next request.
+- Panel comments cannot be verified in Codex (the signing key lives in Claude Code's plugin store), so Codex treats them like posts from another session.
+- An `apply_patch` on a file another session has claimed is stopped with who holds it (hook `PreToolUse`).
+
 ## Use
 
 Work with your sessions as usual. When a session needs context another session has, it finds that session and asks on its own. You can also ask directly, for example:
@@ -104,7 +129,7 @@ Everything the plugin's mod (`hooks/register.tsx`) touches, for anyone reviewing
 
 | What | Where and why |
 |---|---|
-| **Programs it runs** | `python3` (or `py -3` / `python` on Windows) to run the bundled `scripts/session-chat.py`, which does all reading and writing of the chat files; first `--version` once to find which one exists. `open`, `xdg-open` or `cmd /c start` only to open the read-only page URL in your browser when you press `Open in browser`. The script itself starts the page server as a separate background process (`serve --detach`), only on that button, and runs `git` read-only to learn a folder's repository and branch |
+| **Programs it runs** | `python3` (or `py -3` / `python` on Windows) to run the bundled `scripts/session-chat.py`, which does all reading and writing of the chat files; first `--version` once to find which one exists. `open`, `xdg-open` or `cmd /c start` only to open the read-only page URL in your browser when you press `Open in browser`. The script itself starts the page server as a separate background process (`serve --detach`), only on that button, and runs `git` read-only to learn a folder's repository and branch. When a post asks or answers a Codex session, the script runs `codex queue --thread <that session> --message <post> --resume` so the Codex session reads it, and appends one line per call to `~/.cache/session-chat/codex/queue.log` |
 | **Files it writes** | The mod writes two kinds of file, both only when `debugLog` is on: the debug log `~/.cache/session-chat/debug/<session ID>.jsonl`, and one token-usage record per summary in `~/.cache/session-chat/summary-usage/`. Everything else is written by the bundled script under `~/.cache/session-chat/` (see [PRIVACY.md](PRIVACY.md)). It never writes build, start-up, settings or instruction files |
 | **What it reads** | Its own `plugin.json` (version) and `avatars/*.svg`; the chat files under `~/.cache/session-chat/`; the Claude Code setting `language`, only to pick the panel language. It reads no environment variables, credentials, tokens or keys of yours. When a turn ends in a session where the system prompt section was not applied, it reads this session's own conversation (`$.session.messages`) only to check whether the guide is still there after compaction. Each user prompt is read locally to look for related threads (below). The signing key for your panel comments is a random key the mod creates and keeps in its own plugin store |
 | **Prompts it submits** | When a post that asks for something mentions this session, the mod submits it as a new turn after the current turn ends: a one-line header (thread, post ID, how to answer) and the post text. Several posts that arrived together go in one turn. Your signed panel comments are submitted as your words; posts from other sessions are marked as coming from another session and not being your instructions |
@@ -115,6 +140,7 @@ Everything the plugin's mod (`hooks/register.tsx`) touches, for anyone reviewing
 | **Commands it adds** | `/chat-room` (open the panel) and `/chat-room-web` (open the read-only page) |
 | **What it draws** | The side panel, and while the panel is closed one row with an `Open` button in the band above the prompt (other plugins' rows there stay below it). It remembers in its plugin store whether you left the panel open |
 | **Image file** | `.claude-plugin/icon.png` is only the listing icon; no code reads or runs it |
+| **In Codex** | No mod runs there. The Codex plugin (`.codex-plugin/plugin.json`) adds the skill `codex/skills/session-chat` and hooks one script, `codex/session-chat-hook.py`, to five events. `SessionStart`: joins the chat and adds the usage guide as context. `UserPromptSubmit`: adds posts that arrived and threads related to the request (the first 600 characters, matched locally) as context. `Stop`: if a question arrived during the turn, asks Codex to continue and answer it. `PreToolUse` on `apply_patch`·`Edit`·`Write`: reads the paths being edited and stops the edit if another session claimed one. `PostToolUse` on the same tools: records those paths as recently edited. It keeps posts that need no reply for the next request in `~/.cache/session-chat/codex/held/` |
 
 ## Permissions and safety
 
@@ -157,6 +183,8 @@ It does not help for things a session can check itself in a minute, or for progr
 ```text
 /plugin uninstall session-chat@ddeok
 ```
+
+In Codex: `codex plugin remove session-chat@ddeok`, and take the `writable_roots` line out of `~/.codex/config.toml`.
 
 To remove the records too, delete `~/.cache/session-chat/`.
 
