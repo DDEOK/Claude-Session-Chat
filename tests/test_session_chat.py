@@ -631,6 +631,86 @@ class SessionChatTest(unittest.TestCase):
         got = json.loads(self.run_chat("aaaa0001", "poll").stdout)
         self.assertEqual([(m["from"], m["text"]) for m in got], [(cx, "4")])
 
+    def test_codex_session_gets_provisional_name_that_its_own_name_replaces(self):
+        # Codex에는 자동 요약이 없어 이름 없는 세션이 "(no name)"으로만 보였다(2026-11-09). 첫 요청으로 임시 이름을 붙인다
+        env = self.codex_env()
+        full = "01a1b0a0-0000-7000-8000-000000000001"
+        self.hook(env, "SessionStart", session_id=full, source="startup")
+        cx, _ = self.codex_sid()
+        # 대화방 글로 열린 턴은 사람의 요청이 아니라 이름으로 쓰지 않는다
+        self.hook(env, "UserPromptSubmit", session_id=full, turn_id="t0", prompt="[Session chat · thread 'x' (abcd1234) · post abcd1234 from a (aaaa0001)]\nq")
+        self.assertEqual(self.codex_sid()[1][cx].get("title", ""), "")
+        self.hook(env, "UserPromptSubmit", session_id=full, turn_id="t1", prompt="Unity 빌드 스크립트에서 안드로이드 서명 설정을 정리해 줘 그리고 테스트도")
+        title = self.codex_sid()[1][cx]["title"]
+        self.assertTrue(title.startswith("Unity 빌드 스크립트에서"), title)
+        self.assertLessEqual(len(title), 31)
+        # Codex가 직접 지은 이름은 임시 이름을 덮고, 그 뒤의 요청이 다시 덮지 않는다
+        r = subprocess.run([sys.executable, SCRIPT, "profile", "--title", "안드로이드 서명 정리", "--doing", "Unity 빌드 서명"], capture_output=True, text=True, env={**env, "CODEX_THREAD_ID": full}, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.hook(env, "UserPromptSubmit", session_id=full, turn_id="t2", prompt="다른 이야기")
+        self.assertEqual(self.codex_sid()[1][cx]["title"], "안드로이드 서명 정리")
+
+    def test_signed_panel_comment_is_verified_for_codex_with_either_store_key(self):
+        # 패널 의견은 Claude 모드가 자기 저장소의 키로 서명한다. 설치본과 개발판이 저장소 파일을 따로 써서 키가 둘일 수 있다(2026-11-09)
+        import hashlib
+        import hmac
+        store = os.path.join(self.home.name, ".claude", "plugins", "store")
+        os.makedirs(store)
+        keys = ["11" * 32, "22" * 32]
+        for i, k in enumerate(keys):
+            with open(os.path.join(store, f"session-chat_m{i}-abc.json"), "w", encoding="utf-8") as f:
+                json.dump({"userKey": k}, f)
+        env = {k: v for k, v in self.codex_env().items() if k != "CLAUDE_CONFIG_DIR"}
+        full = "01a1b0a0-0000-7000-8000-000000000002"
+        self.hook(env, "SessionStart", session_id=full, source="startup")
+        cx, _ = self.codex_sid()
+        self.join("aaaa0001", "묻는 세션")
+        tid = json.loads(subprocess.run([sys.executable, SCRIPT, "--id", "aaaa0001", "post", "--to", cx, "--title", "서명 시험", "q"], capture_output=True, text=True, env=env, encoding="utf-8").stdout)["thread"]
+
+        def comment(text, key):
+            sig = hmac.new(bytes.fromhex(key), f"{tid}\n{text}".encode(), hashlib.sha256).hexdigest()
+            r = subprocess.run([sys.executable, SCRIPT, "--id", "user", "post", "--to", cx, "--kind", "comment", "--thread", tid, "--sig", sig, text], capture_output=True, text=True, env=env, encoding="utf-8")
+            self.assertEqual(r.returncode, 0, r.stderr)
+
+        comment("둘째 키로 서명한 의견", keys[1])
+        comment("엉뚱한 키로 서명한 의견", "33" * 32)
+        got = {m["text"]: m.get("signed") for m in json.loads(subprocess.run([sys.executable, SCRIPT, "--id", cx, "poll"], capture_output=True, text=True, env=env, encoding="utf-8").stdout) if m["from"] == "user"}
+        self.assertEqual(got, {"둘째 키로 서명한 의견": True, "엉뚱한 키로 서명한 의견": False})
+        # 쉬는 Codex 세션에 codex queue로 넣는 머리말도 같은 판정을 쓴다
+        for _ in range(50):
+            with open(os.path.join(self.home.name, "codex-calls"), encoding="utf-8") as f:
+                calls = f.read()
+            if calls.count("queue") >= 3:
+                break
+            time.sleep(0.1)
+        self.assertIn("signature verified", calls)
+        self.assertIn("signature does not match", calls)
+
+    def test_codex_session_end_drops_it_from_the_list_but_it_still_gets_questions(self):
+        env = self.codex_env()
+        full = "01a1b0a0-0000-7000-8000-000000000003"
+        self.hook(env, "SessionStart", session_id=full, source="startup")
+        cx, _ = self.codex_sid()
+        subprocess.run([sys.executable, SCRIPT, "claim", self.file], capture_output=True, env={**env, "CODEX_THREAD_ID": full})
+        self.join("aaaa0001", "묻는 세션")
+        self.assertIn(cx, self.run_chat("aaaa0001", "who").stdout)
+        self.hook(env, "SessionEnd", session_id=full)
+        self.assertNotIn(cx, self.run_chat("aaaa0001", "who").stdout)
+        # 창을 닫아도 맡아 둔 파일은 놓이고, 질문은 codex queue로 간다(꺼짐 알림도 내지 않는다)
+        self.assertIsNone(json.loads(self.run_chat("aaaa0001", "check", self.file).stdout)["claimed"])
+        r = subprocess.run([sys.executable, SCRIPT, "--id", "aaaa0001", "post", "--to", cx, "--title", "닫힌 뒤", "q"], capture_output=True, text=True, env=env, encoding="utf-8")
+        self.assertEqual(json.loads(r.stdout)["offline"], [])
+
+    def test_id_after_the_subcommand_is_accepted(self):
+        # Codex가 `profile --title … --id <ID>`처럼 하위 명령 뒤에 --id를 붙였다가 실패했다(2026-11-09). 글 본문의 낱말은 옮기지 않는다
+        r = subprocess.run([sys.executable, SCRIPT, "profile", "--title", "뒤에 붙인 ID", "--id", "abcd1234"], capture_output=True, text=True, env=self.env, encoding="utf-8")
+        self.assertEqual(json.loads(r.stdout)["id"], "abcd1234")
+        self.join("bbbb0002", "받는 세션")
+        r = subprocess.run([sys.executable, SCRIPT, "post", "--to", "bbbb0002", "--title", "t", "--id=abcd1234", "본문에 --id 낱말"], capture_output=True, text=True, env=self.env, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        got = json.loads(self.run_chat("bbbb0002", "poll").stdout)
+        self.assertEqual([(m["from"], m["text"]) for m in got], [("abcd1234", "본문에 --id 낱말")])
+
     def test_codex_exec_and_ephemeral_runs_do_not_join(self):
         # 다른 도구가 돌린 codex exec가 실행마다 패널에 쌓였다(2026-11-06). 일회성 실행과 기록 없는 세션은 넣지 않는다
         env = self.codex_env()

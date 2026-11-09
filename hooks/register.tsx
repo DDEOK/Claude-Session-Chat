@@ -484,7 +484,27 @@ async function openPane($: any) {
 // 패널 입력창에만 있고 세션은 쓰지 못한다. 받는 쪽은 보통 멘션과 같아서 규칙을 바꿀 것이 없다
 const ALL_ID = '*all'
 const ALL_LABEL = () => L('모두', 'all')
-type Candidate = { id: string; title: string; members?: string[] }
+type Candidate = { id: string; title: string; members?: string[]; base?: string }
+
+// 이름이 같은 세션이 둘 이상이면 이름 뒤에 #과 ID 앞부분을 붙여 서로 다른 멘션 글자로 만든다(`세션 대화방 열기#d004`).
+// 이름 글자로만 맞춰 보던 때는 같은 이름의 Codex 창 둘이 한 의견에 함께 답했다(2026-11-09 사용자 확인).
+// 순번(#1·#2)은 세션이 닫히고 열릴 때마다 바뀌므로 세션이 사는 동안 그대로인 ID를 쓴다(표기는 사용자 제안)
+function distinctTitles(candidates: Candidate[]) {
+  const count = new Map<string, number>()
+  for (const c of candidates) count.set(c.title, (count.get(c.title) ?? 0) + 1)
+  return candidates.map(c => {
+    if ((count.get(c.title) ?? 0) < 2 || c.id === ALL_ID) return c
+    const same = candidates.filter(o => o.title === c.title && o.id !== c.id)
+    const short = same.some(o => o.id.slice(0, 4) === c.id.slice(0, 4)) ? c.id.slice(0, 8) : c.id.slice(0, 4)
+    return { ...c, title: `${c.title}#${short}`, base: c.title }
+  })
+}
+
+// 겹치는 이름을 ID 없이 쓴 멘션. 누구를 부르는지 모르므로 보내지 않고 목록에서 고르게 한다
+function ambiguousMentions(text: string, candidates: Candidate[]) {
+  const bases = [...new Set(candidates.map(c => c.base).filter((b): b is string => Boolean(b)))]
+  return bases.filter(b => new RegExp(`@${b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!#)`).test(text))
+}
 
 function parseMentions(text: string, candidates: Candidate[]) {
   const found: string[] = []
@@ -505,6 +525,8 @@ async function comment($: any, t: Thread, text: string, candidates: Candidate[])
   try {
     // 글 속 @멘션이 있으면 그 세션에게만 보낸다.
     // 멘션이 없을 때: 특정 글에 답글을 다는 중이면 그 글을 쓴 세션에게, 아니면 스레드 세션 모두에게 묻는다(답할 수 있는 세션이 손을 들고 답한다)
+    const unclear = ambiguousMentions(text, candidates)
+    if (unclear.length) throw new Error(L(`같은 이름의 세션이 둘 이상입니다(${unclear.join(', ')}). @를 다시 치고 목록에서 #ID가 붙은 이름을 골라 주세요`, `More than one session is named ${unclear.join(', ')}. Type @ again and pick the name with its #ID from the list`))
     const mentioned = parseMentions(text, candidates)
     const replyTo = replyTargets.get(t.id) ?? t.root.id
     const replied = [t.root, ...t.posts].find(p => p.id === replyTo)
@@ -995,13 +1017,22 @@ export const register: Register = (on, options) => {
     // 본문의 멘션(@세션 이름, @모두)을 머리줄의 멘션과 같은 파란색으로 칠하려고 나눈다(2026-11-03 사용자 요청). 홀수 칸이 멘션이다.
     // 세션 이름에 띄어쓰기가 있어 아는 이름에 맞는 것만 칠하고, 이름이 겹치면 긴 이름을 먼저 맞춘다
     const knownTitles = [...new Set([...Object.values(sessions), ...Object.values(snap?.names ?? {})].map(p => p?.title ?? '').filter(Boolean))]
-    const mentionRe = new RegExp(`(@(?:${[...knownTitles, '모두', 'all'].sort((a, b) => b.length - a.length).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')}))`, 'g')
+    // 이름이 겹칠 때 붙는 #ID 꼬리표(distinctTitles)도 멘션의 일부라 함께 칠한다(2026-11-09 사용자 캡처)
+    const mentionRe = new RegExp(`(@(?:${[...knownTitles, '모두', 'all'].sort((a, b) => b.length - a.length).map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?:#[0-9a-f]{4,8})?)`, 'g')
+    // 머리줄의 받는 사람도 이름이 겹치면 #ID를 붙여 어느 세션인지 보이게 한다
+    const titleOf = (id: string) => sessions[id]?.title || snap?.names?.[id]?.title || ''
+    const allIds = [...new Set([...Object.keys(sessions), ...Object.keys(snap?.names ?? {})])]
+    const toLabel = (x: string) => {
+      const base = x.split('.')[0] ?? x
+      const title = titleOf(base)
+      return title && allIds.some(o => o !== base && titleOf(o) === title) ? `${who(x).label}#${base.slice(0, 4)}` : who(x).label
+    }
     const mentionParts = (text: string) => text.split(mentionRe)
     const message = async (t: Thread, p: Post, depth: number, inCard = false) => {
       const w = who(p.from)
       const isTarget = replyTargets.get(t.id) === p.id
       const tag = p.kind === 'reply' ? `${KIND().reply} · ${REPLY_LABEL()[p.status ?? ''] ?? p.status}` : KIND()[p.kind] ?? p.kind
-      const to = p.open ? L('스레드 모두에게', 'Everyone in the thread') : p.to.map(x => `@${who(x).label}`).join(' ')
+      const to = p.open ? L('스레드 모두에게', 'Everyone in the thread') : p.to.map(x => `@${toLabel(x)}`).join(' ')
       return (
         <Box key={p.id} flexDirection="row" gap={1} marginTop={inCard ? 0 : 1} alignItems="flex-start">
           {await avatar($, Svg, Text, w.shape, w.hex, depth ? 22 : 28, p.from !== 'user' && !sessions[p.from.split('.')[0] ?? ''])}
@@ -1087,16 +1118,21 @@ export const register: Register = (on, options) => {
       const named: Candidate[] = mentionable(t).map(id => ({ id, title: sessions[id]?.title || snap?.names?.[id]?.title || '' })).filter(c => c.title)
       // 스레드에 세션이 둘 이상이면 목록 맨 위에 "@모두"를 둔다
       const everyone: Candidate[] = inThread.length > 1 ? [{ id: ALL_ID, title: ALL_LABEL(), members: inThread }] : []
-      const candidates = [...everyone, ...named]
+      const candidates = distinctTitles([...everyone, ...named])
       const q = mentionQuery.get(t.id)
       const matches = q === undefined ? [] : candidates.filter(c => c.title.includes(q)).slice(0, 8)
       const draft = drafts.get(t.id) ?? ''
       const target = replyTargets.get(t.id)
       const targetPost = target ? [t.root, ...t.posts].find(p => p.id === target) : undefined
       const mentioned = parseMentions(draft, candidates)
+      const unclear = ambiguousMentions(draft, candidates)
+      // 이름이 겹치면 #ID가 붙은 이름으로 누구에게 가는지 보여 준다
+      const nameOf = (id: string) => candidates.find(c => c.id === id)?.title ?? who(id).label
       // 보내기 전에 누구에게 가는지 미리 알린다
-      const hint = mentioned.length
-        ? L(`${mentioned.map(id => who(id).label).join(', ')}에게 보냅니다`, `Sending to ${mentioned.map(id => who(id).label).join(', ')}`)
+      const hint = unclear.length
+        ? L(`같은 이름의 세션이 둘 이상입니다(${unclear.join(', ')}). @를 다시 치고 목록에서 #ID가 붙은 이름을 고르세요`, `More than one session is named ${unclear.join(', ')}. Type @ again and pick the name with its #ID`)
+        : mentioned.length
+        ? L(`${mentioned.map(nameOf).join(', ')}에게 보냅니다`, `Sending to ${mentioned.map(nameOf).join(', ')}`)
         : targetPost && targetPost.from !== 'user'
           ? L(`${who(targetPost.from).label}의 글에 답글로 보냅니다`, `Replying to ${who(targetPost.from).label}`)
           : L('멘션하지 않으면 이 스레드에 글을 쓴 세션들에게 갑니다. 답할 수 있는 세션 하나가 답하고, 세션마다 답을 받으려면 @모두로 부르세요', 'Without a mention, it goes to the sessions that wrote here and one that can answer replies. To hear from every session, mention @all')
