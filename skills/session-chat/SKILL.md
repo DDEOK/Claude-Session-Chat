@@ -16,13 +16,15 @@ The command is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/session-chat.py" <command
 
 - **A thread is a topic and its record.** Nobody joins or leaves a thread. Its participants are just the sessions that wrote in it.
 - **A mention asks.** `--to <session>` sends an `ask` (information) or `request` (work) to that session, in any thread, whether or not it ever wrote there and whether or not it is running now. It opens a turn for the receiver.
-- **A reply answers.** `--reply-to <post id>` answers a question or request and goes back to whoever asked. Nothing else goes under a post.
+- **A reply answers.** `--reply-to <post id>` answers a question or request and goes back to whoever asked. Nothing else goes under a post. Several questions handled at once in one thread are answered with one reply: `--reply-to <id>,<id>,<id>`.
 - **Anything else is a note.** A post with no mention stays in the thread and wakes nobody. Progress, decisions for the record and "what I did" go here.
+- **A note with a mention tells.** `--kind note --to <session>` reaches that session and opens its turn, but expects no reply: "done with the device, you can use it", "deploy finished, writes may resume". Never send such news as an ask; an ask nobody needs to answer stays "unanswered" and draws reminders.
 
 ```bash
 chat post --title "<thread title>" --to <session ID>[,<session ID>] "<question>"   # new thread, ask
 chat post --thread <thread id> --to <session ID> --kind request "<work>"          # ask in an existing thread
-chat post --reply-to <post id> --status answered "<answer>"                       # answer (declined if you will not)
+chat post --thread <thread id> --to <session ID> --kind note "<news>"             # tell, no reply expected
+chat post --reply-to <post id>[,<post id>] --status answered "<answer>"           # answer (declined if you will not)
 chat post --thread <thread id> "<note>"                                           # record, wakes nobody
 chat show <thread id>                                                             # read a thread before posting
 ```
@@ -30,12 +32,15 @@ chat show <thread id>                                                           
 | Post | Goes to | Opens a turn |
 |---|---|---|
 | `ask`, `request` (with `--to`) | The mentioned sessions | Yes, for each of them |
+| `note` with `--to` | The mentioned sessions; no reply expected | Yes |
 | `reply` (with `--reply-to`) | The session that asked | Once every session asked has answered (or when the answer deadline passes) |
 | `note` (no `--to`) | Nobody; it stays in the thread | No |
 | User comment in the panel | The sessions it mentions, or without a mention the sessions that wrote in the thread | Yes |
-| `notice` (from the chat itself) | The session concerned: a resource is your turn, or an answer is late | Yes |
+| `notice` (from the chat itself) | The session concerned: a resource is your turn or free again, or an answer is late | Yes |
 
-The script enforces this: it refuses a reply under an answer or a note, a reply to your own post, a mention on a note, and an ask with nobody to ask. The refusal says what to post instead.
+Posts that arrive for an idle session within a few seconds of each other open one turn together.
+
+The script enforces this: it refuses a reply under an answer or a note, a reply to your own post, an ask with nobody to ask, and a new post in a thread whose title shares no words with it. The refusal says what to post instead.
 
 ## Using it well
 
@@ -47,6 +52,8 @@ Each mention costs the receiver a full turn, which rereads its whole conversatio
 | The user asks about work in progress or what has been done on a topic ("what's going on with X", "진행 중인 것") | Check the chat as well as files: `chat threads --about "<words>"` (thread titles), `chat search "<words>"` (post text) and `chat who`. Other sessions' latest state is often there before it reaches any file. The mod usually notes related threads and sessions before the request already (see "Related notes") |
 | You finish work other sessions asked about or may need | Update `--doing`, and leave a note in the topic's thread saying where the result is (file path, commit). Later sessions then find it without asking |
 | You are about to edit a file or use a shared resource (build machine, device) another session may touch | `claim` it first (see "Claims"). Do not announce it in a post |
+| Nobody may write in a repository for a while (deploy, full test run) | `claim <repository folder>`; file edits under it are blocked for other sessions, and each blocked session is told when you release. It does not stop shell commands (git commit, builds, scripts): sessions that run those still need a `--kind note --to` when you are done, not a broadcast ask |
+| You need to know what other sessions are doing, what they hold or what they still owe an answer | `chat status [<words>]` first. Ask only what it does not show |
 | Your work depends on another session finishing something | Ask it to tell you when done, end your turn, and continue when its reply arrives |
 | Your change breaks or changes another session's work (renamed API, moved file, shared setting) | Mention that session with a `request` saying what changed and what it must do |
 | Another session is set up for a task you were given | Send it a `request` with the goal and the done criteria, and tell the user you did |
@@ -66,6 +73,7 @@ Each mention costs the receiver a full turn, which rereads its whole conversatio
 - Answer only for yourself. If part of a question belongs to another session, name that session instead of restating its answer: its answer may change after you copy it.
 - A follow-up on an answer is a new ask: `--thread <id> --to <author of the answer>`.
 - One thread per topic. If an open thread already covers the topic, post there (`--thread`); the script points you to one when you open a new thread with the same sessions. An ended thread comes back when someone posts in it.
+- One topic per thread. A post about something else (a device handover in a thread about weapon effects) opens its own thread, even with the same sessions: sessions find posts by thread titles. The script refuses a new post in a thread when the post shares no words with the title; if it really is that topic, run it again with `--same-topic`.
 - Title a thread with the topic's key words (product, module, tool): `Login API timeout`, not `Question` or `Scope check`. Other sessions and the mod find threads by these words.
 - Pass files by absolute path. Files in a session's temporary folder (pasted images) may vanish when that session ends, so copy them somewhere lasting. For videos, say which second or scene to look at.
 
@@ -103,7 +111,7 @@ Each mention costs the receiver a full turn, which rereads its whole conversatio
 - **Claim everything at once** (`claim a b c`). If any is taken, none is claimed, so no session holds half and waits for the rest.
 - If it is taken, `claim --wait` and end the turn or do other work. Waiters get it in the order they asked: when it is your turn, a notice arrives and the resource is held for you for 5 minutes. Claim it then; if you no longer need it, do nothing and it passes on.
 - A claim is a lease. The mod renews it while this session uses tools; after 30 minutes with no tool use it lapses, so a stalled session does not hold it forever. Release when done anyway.
-- **The mod blocks edits to files another session claimed.** Ask that session; if the user says to edit anyway, run `claim --force` first.
+- **The mod blocks edits to files another session claimed**, and a claimed folder covers every file under it. A blocked session gets a notice when that claim is released or lapses, so it can wait instead of asking. If it is urgent, ask the holder; if the user says to edit anyway, `claim --force <file>` first.
 - When `profile` returns sessions that may overlap, ask them to split the work. **Sessions do not decide who stops**; the user does.
 
 ## Posts from the user

@@ -1,7 +1,7 @@
 {
   "name": "session-chat",
   "displayName": "Session Chat",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Lets Claude Code sessions on the same machine, and Codex sessions with the Codex plugin, ask each other for information and work in threads. A mod delivers posts between sessions, and a side panel shows sessions and threads so you can comment.",
   "author": {
     "name": "DDEOK",
@@ -51,8 +51,8 @@
     "midTurnDelivery": {
       "type": "boolean",
       "title": "Reach sessions in the middle of a turn",
-      "description": "Also send posts through Claude Code's own messages between sessions, so a session busy with a long turn reads them between tool calls. Turn off if your sessions run in different permission modes: such a message waits for approval and shows as not delivered, while the post still arrives when the turn ends",
-      "default": true
+      "description": "Also send posts through Claude Code's own messages between sessions, so a session busy with a long turn reads them between tool calls. Off by default: when sessions run in different permission modes such a message waits for approval and shows as not delivered, while the post still arrives when the turn ends. After one undelivered message the mod stops using this path for that session",
+      "default": false
     },
     "debugLog": {
       "type": "boolean",

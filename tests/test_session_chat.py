@@ -64,6 +64,43 @@ class SessionChatTest(unittest.TestCase):
         self.assertEqual(other["claimed"]["id"], "aaaa0001")
         self.assertIsNone(own["claimed"])
 
+    def test_folder_claim_blocks_files_under_it_and_tells_when_free(self):
+        # 배포 동안 저장소 쓰기를 멈추는 일을 "빌드 끝, 써도 된다" 글 대신 폴더 claim으로 한다(2026-11-20)
+        self.join("aaaa0001", "배포 세션")
+        self.join("bbbb0002", "고치는 세션")
+        self.run_chat("aaaa0001", "claim", self.work, "--note", "배포 중")
+        seen = json.loads(self.run_chat("bbbb0002", "check", self.file).stdout)
+        self.assertEqual((seen["claimed"]["id"], seen["claimed"]["target"]), ("aaaa0001", os.path.abspath(self.work)))
+        self.run_chat("bbbb0002", "check", self.file)
+        self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
+        self.run_chat("aaaa0001", "release", "--all")
+        got = json.loads(self.run_chat("bbbb0002", "poll").stdout)
+        self.assertEqual(len(got), 1)
+        self.assertIn("free now", got[0]["text"])
+        self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
+        # 남의 폴더 claim 아래 파일을 그냥 잡아 우회하지 못하고, 남이 잡은 파일을 품은 폴더도 잡지 못한다
+        self.run_chat("aaaa0001", "claim", self.work)
+        self.assertIn("already claimed", self.run_chat("bbbb0002", "claim", self.file, ok=False).stderr)
+        self.run_chat("aaaa0001", "release", "--all")
+        self.run_chat("bbbb0002", "claim", self.file)
+        self.assertIn("already claimed", self.run_chat("aaaa0001", "claim", self.work, ok=False).stderr)
+        self.run_chat("bbbb0002", "release", "--all")
+        # 사용자 결정으로 그 파일만 --force로 잡으면 폴더 claim이 있어도 고칠 수 있다
+        self.run_chat("aaaa0001", "claim", self.work)
+        self.run_chat("bbbb0002", "claim", "--force", self.file)
+        self.assertIsNone(json.loads(self.run_chat("bbbb0002", "check", self.file).stdout)["claimed"])
+
+    def test_status_shows_work_claims_and_owed_answers(self):
+        self.join("aaaa0001", "조율 세션", "세션 나누기")
+        self.join("bbbb0002", "빌드 세션", "안드로이드 빌드")
+        self.run_chat("bbbb0002", "claim", "unity-batch")
+        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "빌드 순서", "빌드 언제 끝나?")
+        out = self.run_chat("aaaa0001", "status").stdout
+        self.assertIn("doing: 안드로이드 빌드", out)
+        self.assertIn("claims: unity-batch", out)
+        self.assertIn("not yet answered: '빌드 순서'", out)
+        self.assertNotIn("조율 세션", self.run_chat("aaaa0001", "status", "안드로이드").stdout)
+
     def test_new_thread_needs_title_and_a_post_without_mention_is_a_note(self):
         self.join("aaaa0001", "보내는 세션")
         self.join("bbbb0002", "받는 세션")
@@ -74,9 +111,42 @@ class SessionChatTest(unittest.TestCase):
         self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
         self.assertEqual(json.loads(self.run_chat("aaaa0001", "dump").stdout)["threads"][0]["root"]["kind"], "note")
         self.assertNotEqual(self.run_chat("aaaa0001", "post", "--kind", "ask", "--thread", note["thread"], "누구든", ok=False).returncode, 0)
-        # 멘션은 질문·요청이라 기록 종류로 멘션하지 못한다
-        r = self.run_chat("aaaa0001", "post", "--kind", "note", "--to", "bbbb0002", "--thread", note["thread"], "알림", ok=False)
-        self.assertIn("drop --to", r.stderr)
+        # 기록 종류로 멘션하면 알림 지목이다: 받는 세션을 깨우지만 답을 기다리지 않는다(2026-11-20)
+        tell = json.loads(self.run_chat("aaaa0001", "post", "--kind", "note", "--to", "bbbb0002", "--thread", note["thread"], "기록: 빌드 끝, 써도 된다").stdout)
+        got = json.loads(self.run_chat("bbbb0002", "poll").stdout)
+        self.assertEqual([(m["kind"], m["quiet"]) for m in got], [("note", False)])
+        self.assertEqual(json.loads(self.run_chat("aaaa0001", "dump").stdout)["threads"][0]["pending"], [])
+        self.assertIn("not a question", self.run_chat("bbbb0002", "post", "--reply-to", tell["id"], "--status", "answered", "확인", ok=False).stderr)
+
+    def test_one_reply_closes_several_questions(self):
+        # 삭제 담당이 몇 건을 묶어 지우고 하나에만 답해, 나머지가 답 없음으로 남았다(2026-11-20 실사용 기록)
+        for sid, title in (("aaaa0001", "묻는 세션 1"), ("bbbb0002", "묻는 세션 2"), ("cccc0003", "삭제 담당")):
+            self.join(sid, title)
+            self.run_chat(sid, "poll")
+        tid = json.loads(self.run_chat("cccc0003", "post", "--title", "삭제 요청 창구", "삭제 요청은 여기에").stdout)["thread"]
+        q1 = json.loads(self.run_chat("aaaa0001", "post", "--thread", tid, "--to", "cccc0003", "삭제 요청: 페이지 A").stdout)
+        q2 = json.loads(self.run_chat("bbbb0002", "post", "--thread", tid, "--to", "cccc0003", "삭제 요청: 페이지 B").stdout)
+        self.run_chat("cccc0003", "post", "--reply-to", f"{q1['id']},{q2['id']}", "--status", "answered", "둘 다 지웠다")
+        self.assertEqual(json.loads(self.run_chat("aaaa0001", "dump").stdout)["threads"][0]["pending"], [])
+        # 묻은 두 세션 모두 답을 받아 깨어난다
+        for sid in ("aaaa0001", "bbbb0002"):
+            got = json.loads(self.run_chat(sid, "poll").stdout)
+            self.assertEqual([(m["text"], m["quiet"]) for m in got], [("둘 다 지웠다", False)])
+        other = json.loads(self.run_chat("aaaa0001", "post", "--title", "다른 일", "--to", "cccc0003", "질문").stdout)
+        self.assertIn("same thread", self.run_chat("cccc0003", "post", "--reply-to", f"{q1['id']},{other['id']}", "--status", "answered", "x", ok=False).stderr)
+
+    def test_post_off_the_thread_title_is_refused(self):
+        self.join("aaaa0001", "묻는 세션")
+        self.join("bbbb0002", "답하는 세션")
+        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "화염탄 레벨 효과", "화염탄 5레벨 효과 정했나?").stdout)
+        self.run_chat("bbbb0002", "post", "--reply-to", ask["id"], "--status", "answered", "정했다")
+        # 조사가 붙은 낱말(화염탄은)은 제목과 겹친 것으로 본다
+        self.run_chat("aaaa0001", "post", "--thread", ask["thread"], "--to", "bbbb0002", "화염탄은 언제 넣나?")
+        # 제목과 낱말이 하나도 겹치지 않으면 새 스레드로 보낸다
+        r = self.run_chat("aaaa0001", "post", "--thread", ask["thread"], "--to", "bbbb0002", "--kind", "note", "에뮬레이터 다 썼다. 이제 써도 된다.", ok=False)
+        self.assertIn("--same-topic", r.stderr)
+        # 방금 나에게 온 글에 짧게 이어 묻는 것은 막지 않는다
+        self.run_chat("bbbb0002", "post", "--thread", ask["thread"], "--to", "aaaa0001", "하나 더: 오늘 밤?")
 
     def test_poll_delivers_only_to_recipient_once(self):
         self.join("aaaa0001", "보내는 세션")
@@ -104,7 +174,7 @@ class SessionChatTest(unittest.TestCase):
         self.assertNotEqual(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--thread", root["thread"], "둘", ok=False).returncode, 0)
         # 사용자가 그 세션에 요청을 보내면 다시 참여한다
         self.assertIn("Back", self.run_chat("bbbb0002", "activity", "--user").stdout)
-        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--thread", root["thread"], "셋")
+        self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--thread", root["thread"], "--same-topic", "셋")
         # 나가기 전에 와 있던 글(하나)도 돌아오면 받는다
         self.assertEqual([m["text"] for m in json.loads(self.run_chat("bbbb0002", "poll").stdout)], ["하나", "셋"])
 
@@ -389,7 +459,7 @@ class SessionChatTest(unittest.TestCase):
         self.run_chat("bbbb0002", "post", "--reply-to", ask["id"], "--status", "answered", "써도 된다.")
         # 참여자는 글을 쓴 세션뿐이다. 글을 쓴 적 없는 세션도 멘션하면 받는다
         self.assertEqual(json.loads(self.run_chat("aaaa0001", "dump").stdout)["threads"][0]["participants"], ["aaaa0001", "bbbb0002"])
-        self.run_chat("bbbb0002", "post", "--thread", ask["thread"], "--to", "cccc0003", "단말도 쓸 건가?")
+        self.run_chat("bbbb0002", "post", "--thread", ask["thread"], "--to", "cccc0003", "--same-topic", "단말도 쓸 건가?")
         self.assertEqual([m["text"] for m in json.loads(self.run_chat("cccc0003", "poll").stdout)], ["단말도 쓸 건가?"])
 
     def test_reply_rules_keep_answers_under_questions(self):
@@ -434,6 +504,17 @@ class SessionChatTest(unittest.TestCase):
         got = json.loads(self.run_chat("aaaa0001", "poll", "--answer-minutes", "0.001").stdout)
         self.assertEqual([(m["kind"], m["quiet"]) for m in got], [("notice", False)])
         self.assertIn("No answer yet", got[0]["text"])
+        self.assertEqual(json.loads(self.run_chat("aaaa0001", "poll", "--answer-minutes", "0.001").stdout), [])
+
+    def test_no_reminder_when_the_asked_session_posted_in_the_thread(self):
+        # 답 대신 진행 기록으로 이어 간 세션을 재촉하지 않는다(2026-11-20 실사용 기록: 재촉 129번)
+        self.join("aaaa0001", "묻는 세션")
+        self.join("bbbb0002", "바쁜 세션")
+        self.run_chat("aaaa0001", "poll")
+        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "빌드 질문", "빌드 언제?").stdout)
+        self.run_chat("bbbb0002", "seen", ask["id"])
+        self.run_chat("bbbb0002", "post", "--thread", ask["thread"], "빌드 도는 중, 20분 남음")
+        time.sleep(0.2)
         self.assertEqual(json.loads(self.run_chat("aaaa0001", "poll", "--answer-minutes", "0.001").stdout), [])
 
     def test_claim_lapses_without_renewal(self):
@@ -514,7 +595,7 @@ class SessionChatTest(unittest.TestCase):
         tid = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "엔진 조사", "근거가 뭐야?").stdout)["thread"]
         self.run_chat("bbbb0002", "post", "--thread", tid, "리플렉션은 심사 위험이라 브리지를 쓴다")
         for i in range(8):
-            self.run_chat("aaaa0001", "post", "--thread", tid, f"다른 이야기 {i}")
+            self.run_chat("aaaa0001", "post", "--thread", tid, f"엔진 이야기 {i}")
         show = self.run_chat("cccc0003", "show", tid).stdout
         self.assertNotIn("리플렉션", show)
         self.assertIn("Showing the last 8 of 10 posts", show)

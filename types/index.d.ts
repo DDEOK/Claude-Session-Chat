@@ -23,6 +23,8 @@ export type Post = {
   status?: string
   sig?: string
   reply_to?: string
+  // 여러 질문에 한 번에 답한 글(--reply-to a,b,c)이 닫는 질문 번호들. reply_to는 그 첫 번호다
+  replies?: string[]
   open?: boolean
   top?: boolean
   // 이 글로 새 턴을 여는 받는 세션들. 없는 옛 글은 받는 세션 모두가 턴을 연다

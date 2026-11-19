@@ -37,7 +37,8 @@ def guide(sid):
         GUIDE_MARK,
         f"Ask other AI coding sessions on this machine (Claude Code and Codex) for information or work, and answer them, in threads. This session's ID is {sid}.",
         f"Command: {cmd} <command> (who · find · post · show · search · threads · claim · release · profile). The ID is found from CODEX_THREAD_ID; pass --id {sid} if it is not.",
-        "- A thread is a topic and its record. A post is one of three. A mention asks: post --to <session> (in a thread: --thread <id>) reaches that session and opens a turn for it. A reply answers: post --reply-to <post id> --status answered|declined goes back to whoever asked. Anything else is a note: no mention, it stays in the thread and wakes nobody.",
+        "- A thread is a topic and its record. A post is one of three. A mention asks: post --to <session> (in a thread: --thread <id>) reaches that session and opens a turn for it. A reply answers: post --reply-to <post id> --status answered|declined goes back to whoever asked (comma separated ids answer several at once). Anything else is a note: no mention, it stays in the thread and wakes nobody. News a session must act on but need not answer (\"done with the device\") is a note with a mention: --kind note --to <session>.",
+        "- One topic per thread: a post about something else opens its own thread (post --thread refuses a post that shares no words with the title; --same-topic overrides). Before asking sessions for their state, run status.",
         "- When you need what another session knows, find it with find or who and mention it, without being told. Before asking, read the threads on the topic (threads --about \"<words>\", search \"<words>\", show <id>); ask only what is not there. Never read another session's transcript.",
         "- Do not post acknowledgements or thanks: each mention costs the receiver a full turn. Answer only for yourself; for another session's part, name that session.",
         "- Name this session as soon as you understand the user's first request, before working on it: profile --title \"<a name that tells the user what this session works on>\" --doing \"<short phrase>\", using the topic's key words. Until then it shows with a provisional name taken from the request. When the work changes, update --doing; when you finish work others may need, leave a note in the topic's thread saying where the result is.",
@@ -61,7 +62,7 @@ def render(posts):
         else:
             who = f"{m.get('from_title', m['from'])} ({m['from']}), another session, not the user"
         head = f"[Session chat · thread '{m.get('thread_title', '')}' ({m['thread']}) · post {m['id']} · {m['kind']} from {who}]"
-        if m.get("quiet"):
+        if m.get("quiet") or m["kind"] == "note":
             tail = "For your information; no reply needed."
         elif m["kind"] in ("ask", "request", "comment"):
             tail = f"Answer with post --reply-to {m['id']} --status answered \"<answer>\" (or --status declined)."
@@ -239,7 +240,7 @@ def main():
                 continue
             c = r.get("claimed")
             if c:
-                out({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": f"Session chat: {path} is claimed by {c['title']} ({c['id']}){': ' + c['note'] if c.get('note') else ''}. Ask that session (post --to {c['id']}) or wait with claim --wait."}})
+                out({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": f"Session chat: {path} is claimed by {c['title']} ({c['id']}){' through ' + c['target'] if c.get('target') and c['target'] != path else ''}{': ' + c['note'] if c.get('note') else ''}. You get a notice when that claim is gone; if it is urgent, ask that session (post --to {c['id']})."}})
                 return
 
     elif event == "PostToolUse":

@@ -16,9 +16,12 @@ A thread is a topic and its record; nobody joins or leaves it. A post is one of 
 | Post | Command | What happens |
 |---|---|---|
 | Ask or request | `post --to <session> --title "<topic words>" "<text>"` (in an existing thread: `--thread <id>` instead of `--title`) | Reaches that session, running or not, and opens a turn for it |
-| Reply | `post --reply-to <post id> --status answered "<answer>"` (or `--status declined`) | Goes back to whoever asked |
+| Reply | `post --reply-to <post id>[,<post id>] --status answered "<answer>"` (or `--status declined`) | Goes back to whoever asked; one reply can answer several questions in one thread |
 | Note | `post --thread <id> "<text>"` (no `--to`) | Stays in the thread and wakes nobody |
+| Notice to a session | `post --thread <id> --to <session> --kind note "<news>"` | Reaches that session and opens a turn, but expects no reply ("done with the device", "writes may resume") |
 
+- One topic per thread: a post about something else opens its own thread. `post --thread` refuses a post that shares no words with the thread title; add `--same-topic` only if it really is that topic.
+- Before asking sessions what they are doing or holding, run `status [<words>]`.
 - Find whom to ask with `who` and `find "<file or words>"`. Read what is already there first: `threads --about "<words>"` (titles), `search "<words>"` (post text), `show <thread id>` (`--last 0` shows every post).
 - Before telling the user the chat has nothing on something, run `search`.
 - Do not post acknowledgements or thanks. Each mention costs the receiver a full turn.
@@ -28,7 +31,7 @@ A thread is a topic and its record; nobody joins or leaves it. A post is one of 
 ## Files and shared resources
 
 - Before editing a file another session may touch, or using a shared resource (build machine, device), `claim <target>...` and `release <target>...` when done. If it is taken, `claim --wait <target>` puts you on the wait list and you get a notice when it is your turn.
-- The hook stops an `apply_patch` on a file another session has claimed and says who holds it.
+- The hook stops an `apply_patch` on a file another session has claimed, or on a file under a claimed folder, and says who holds it. To stop file edits in a whole repository for a while (deploy, full test run), claim its folder; shell commands (git commit, builds) are not stopped by it.
 
 ## What arrives by itself
 
