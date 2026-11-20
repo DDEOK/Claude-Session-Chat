@@ -1,4 +1,9 @@
+# AI 도구용 작업 규칙·설정. 개인 작업 지침이라 배포하지 않는다(.agents/·.claude-plugin/·.codex-plugin/은 배포 파일이라 여기 넣지 않는다)
 CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+GEMINI.md
+.claude/
+.cursor/
 __pycache__/
 .DS_Store
-.claude/
