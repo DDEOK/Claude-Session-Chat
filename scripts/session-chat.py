@@ -15,6 +15,7 @@
 - `threads.json`: thread title and opener. State and participants are computed from the log.
 - `board.json`: who has claimed what. A claim is a lease the mod renews while the holder uses tools.
 - `waits.json`: sessions waiting for a claim, in arrival order. Each gets the targets handed over in turn.
+- `events.jsonl`: things that never become posts, kept to measure the chat later: posts refused for not matching the thread title, blocked edits, freed claims, late-answer reminders, status calls. No post text. Trimmed to its newer half past 2 MB.
 - `watch.json`: sessions whose edit a claim blocked (a claimed folder covers the files under it). Each gets one notice when that claim is gone.
 - `receipts.json`, `nudged.json`, `sent.json`: when a session got a post, which unanswered questions were already flagged, which posts already went over session messages.
 - `cursors/<ID>`: how far that participant has read.
@@ -81,6 +82,29 @@ def _path(*parts):
     p = os.path.join(ROOT, *parts)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     return p
+
+
+EVENTS_MAX = 2_000_000
+
+
+def _event(sid, ev, **data):
+    """나중에 효과를 재려고 사건 하나를 events.jsonl에 남긴다. 글 기록(log.jsonl)에 안 남는 것만 적고, 글 본문은 적지 않는다.
+
+    제목 검사에 거절된 글·막힌 고치기·풀림 알림·재촉은 글로 올라가지 않아, 기록이 없으면 오탐 비율이나 효과를 잴 수 없다(2026-11-20 사용자 요청).
+    기록 실패는 대화방 동작을 막지 않는다.
+    """
+    path = _path("events.jsonl")
+    try:
+        # simplified: 2MB를 넘으면 뒤 절반만 남긴다. 오래 모아 볼 일이 생기면 archive처럼 월별 파일로 옮긴다
+        if os.path.exists(path) and os.path.getsize(path) > EVENTS_MAX:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(lines[len(lines) // 2:])
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": _now(), "sid": sid, "ev": ev, **data}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _codex_id(full):
@@ -341,6 +365,7 @@ def cmd_check(a):
         if hit:
             target, claim = hit
             out["claimed"] = {"id": claim["by"], "title": _label(sessions, claim["by"]), "note": claim.get("note", ""), "target": target}
+            _event(sid, "edit_blocked", target=target, by=claim["by"], folder=target != path)
             # 막힌 세션을 적어 두고, 풀리면 poll이 알린다(_free_notices)
             watch = _load("watch.json", {})
             mine = watch.setdefault(sid, [])
@@ -462,6 +487,7 @@ def cmd_status(a):
     words = (a.words or "").lower()
     board = _load("board.json", {})
     states = _thread_states()
+    _event(me, "status", words=bool(words))
     shown = 0
     for sid, p in sorted(_live_sessions().items()):
         place = p.get("repo") or p.get("cwd", "")
@@ -620,7 +646,7 @@ def cmd_post(a):
                 sys.exit("Only the user comments. Sessions post ask, request, note or reply.")
     if not tid and a.kind in ("reply", "comment"):
         sys.exit(f"{a.kind} needs --reply-to <post id>.")
-    # 스레드 제목과 낱말이 하나도 겹치지 않는 새 글은 올리지 않는다. 화염탄 스레드에 기기 사용 알림이, 성장 구현 스레드에 빌드 끝 알림이 섞여
+    # 스레드 제목과 낱말이 하나도 겹치지 않는 새 글은 올리지 않는다. 기능 논의 스레드에 기기 사용 알림이나 빌드 끝 알림이 섞여
     # 제목으로 찾는 세션이 그 글을 못 찾았다(2026-11-20 실사용 기록: 스레드 새 글 373개 중 61개가 제목과 겹침 없음. 표본 다수가 다른 주제였지만 같은 주제의 커밋·푸시 보고도 섞여 있었다)
     # simplified: 낱말 겹침만 본다. 같은 주제를 다른 낱말로 쓴 글은 --same-topic이 필요하다. 오탐이 잦으면 거절 대신 경고로 내린다
     if tid and not as_reply and me != USER and not a.same_topic:
@@ -629,6 +655,7 @@ def cmd_post(a):
         last = next((m for m in reversed(log) if m["thread"] == tid), None)
         follow_up = last and me in last.get("to", []) and len(a.text) < 80
         if not follow_up and _off_topic(title, a.text):
+            _event(me, "off_topic", thread=tid, kind=a.kind, to=len(to), chars=len(a.text))
             sys.exit(f"Not posted: this post shares no words with the thread title '{title}'. If it is another topic, look for its thread first (threads --about \"<topic words>\") and post there, or open a new thread named with its key words: post --title \"<topic>\" (instead of --thread). If it is this thread's topic, run the same command with --same-topic.")
     # 꺼진 세션은 다시 켜지면 받는다. 보낸 쪽이 바로 알아 기다릴지, 다른 세션에 물을지, 사용자에게 알릴지 정하게 한다
     offline = [t for t in to if t != USER and not _is_live(t) and not _codex_addr(sessions, t)]
@@ -645,6 +672,9 @@ def cmd_post(a):
     # 새 글 표시: 스레드에 이어 쓴 글이지만 누구의 답글도 아니라 스레드의 새 글이다. 패널은 첫 글처럼 카드 없이 그린다
     if tid and not as_reply:
         msg["top"] = True
+    # 제목 검사를 넘긴 글. 거절(events의 off_topic)과 견줘 오탐 비율을 잰다
+    if a.same_topic:
+        msg["same_topic"] = True
     with _Lock():
         threads = _load("threads.json", {})
         if tid:
@@ -1035,6 +1065,7 @@ def _answer_notices(sid, minutes):
         if not late:
             continue
         nudged[m["id"]] = now
+        _event(sid, "nudge", post=m["id"], kind=m["kind"], late=late)
         who = ", ".join(_label(sessions, t) for t in late)
         title = threads.get(m["thread"], {}).get("title", "")
         so_far = [t for t in m["to"] if t in done]
@@ -1073,6 +1104,7 @@ def _free_notices(sid):
         if c and c["by"] == w["by"] and _held(c):
             keep.append(w)
         else:
+            _event(sid, "freed", target=w["target"], by=w["by"])
             out.append(_notice(sid, f"'{w['target']}' is free now: {_label(sessions, w['by'])} ({w['by']}) no longer holds it. The edit that was blocked there can go ahead."))
     if out:
         if keep:

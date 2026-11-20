@@ -77,6 +77,8 @@ class SessionChatTest(unittest.TestCase):
         got = json.loads(self.run_chat("bbbb0002", "poll").stdout)
         self.assertEqual(len(got), 1)
         self.assertIn("free now", got[0]["text"])
+        with open(os.path.join(self.home.name, ".cache", "session-chat", "events.jsonl"), encoding="utf-8") as f:
+            self.assertEqual([json.loads(line)["ev"] for line in f], ["edit_blocked", "edit_blocked", "freed"])
         self.assertEqual(json.loads(self.run_chat("bbbb0002", "poll").stdout), [])
         # 남의 폴더 claim 아래 파일을 그냥 잡아 우회하지 못하고, 남이 잡은 파일을 품은 폴더도 잡지 못한다
         self.run_chat("aaaa0001", "claim", self.work)
@@ -138,15 +140,23 @@ class SessionChatTest(unittest.TestCase):
     def test_post_off_the_thread_title_is_refused(self):
         self.join("aaaa0001", "묻는 세션")
         self.join("bbbb0002", "답하는 세션")
-        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "화염탄 레벨 효과", "화염탄 5레벨 효과 정했나?").stdout)
+        ask = json.loads(self.run_chat("aaaa0001", "post", "--to", "bbbb0002", "--title", "로그인 화면 시간 초과", "로그인 시간 초과 값 정했나?").stdout)
         self.run_chat("bbbb0002", "post", "--reply-to", ask["id"], "--status", "answered", "정했다")
-        # 조사가 붙은 낱말(화염탄은)은 제목과 겹친 것으로 본다
-        self.run_chat("aaaa0001", "post", "--thread", ask["thread"], "--to", "bbbb0002", "화염탄은 언제 넣나?")
+        # 조사가 붙은 낱말(로그인은)은 제목과 겹친 것으로 본다
+        self.run_chat("aaaa0001", "post", "--thread", ask["thread"], "--to", "bbbb0002", "로그인은 언제 넣나?")
         # 제목과 낱말이 하나도 겹치지 않으면 새 스레드로 보낸다
         r = self.run_chat("aaaa0001", "post", "--thread", ask["thread"], "--to", "bbbb0002", "--kind", "note", "에뮬레이터 다 썼다. 이제 써도 된다.", ok=False)
         self.assertIn("--same-topic", r.stderr)
         # 방금 나에게 온 글에 짧게 이어 묻는 것은 막지 않는다
         self.run_chat("bbbb0002", "post", "--thread", ask["thread"], "--to", "aaaa0001", "하나 더: 오늘 밤?")
+        # 거절과 넘김은 나중에 오탐 비율을 재도록 남는다. 본문은 남기지 않는다
+        same = json.loads(self.run_chat("aaaa0001", "post", "--thread", ask["thread"], "--same-topic", "에뮬레이터 다 썼다").stdout)
+        with open(os.path.join(self.home.name, ".cache", "session-chat", "events.jsonl"), encoding="utf-8") as f:
+            events = [json.loads(line) for line in f]
+        self.assertEqual([(e["ev"], e["chars"]) for e in events if e["ev"] == "off_topic"], [("off_topic", len("에뮬레이터 다 썼다. 이제 써도 된다."))])
+        self.assertNotIn("에뮬레이터", json.dumps(events, ensure_ascii=False))
+        log = json.loads(self.run_chat("aaaa0001", "dump").stdout)
+        self.assertTrue(any(p.get("same_topic") for t in log["threads"] for p in [t["root"], *t["posts"]] if p["id"] == same["id"]))
 
     def test_poll_delivers_only_to_recipient_once(self):
         self.join("aaaa0001", "보내는 세션")

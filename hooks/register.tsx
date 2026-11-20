@@ -250,13 +250,15 @@ function describe(m: Post) {
   const age = m.age ? `\n- Sent ${m.age} ago. It may have piled up while this session was closed, so check it still applies before acting on it.` : ''
   // 서명이 확인되지 않은 글이라도 멘션 없는 질문이면 손들기 규칙을 알린다. 빠뜨리면 받은 세션이 모두 답한다(실측)
   const open = m.open ? `\n- The user wrote to everyone in the thread, with no mention. If it asks something one session can answer, first claim it with take ${m.id}, and answer only if that says ok. If it is an instruction for every session, each does its part.` : ''
-  // 알림 지목(note --to)은 답을 기다리지 않는다. 답하면 그 답이 아무것도 닫지 못하고 상대 턴만 연다
-  const tell = m.kind === 'note' && !m.quiet ? '\n- A notice addressed to you: no reply is needed. Act on it if it bears on your work.' : ''
-  return `- Thread '${m.thread_title}' (${m.thread}) · post ${m.id}\n- From: ${m.from_title} (${m.from}) · ${m.kind}${status}${age}${open}${tell}\n\n${m.text}`
+  // 알림 지목(note --to)에 답하지 않는 것은 머리말이 말한다(flushHeld: HOW_TO_ANSWER·NO_REPLY)
+  return `- Thread '${m.thread_title}' (${m.thread}) · post ${m.id}\n- From: ${m.from_title} (${m.from}) · ${m.kind}${status}${age}${open}\n\n${m.text}`
 }
 
 // 받은 글에 붙이는 답하는 법. 답글은 질문에 대한 답 하나뿐이라, 확인·감사처럼 답이 아닌 것은 올리지 말라고 함께 적는다(2026-11-03 점검)
-const HOW_TO_ANSWER = "Answer an ask or request with post --reply-to <post id> --status answered (or declined); the answer goes back to whoever asked. Answer only your own part; for another session's part, name that session instead of restating its answer. To ask a session something, mention it with post --thread <thread id> --to <session>. Do not post acknowledgements or thanks: a post that answers nothing and asks nothing stays unread. Write tersely: facts and asks only."
+// 남의 몫·짧게 쓰기·묻는 법은 매 턴 안내(guide)에 있어 빼고, 감사 글 금지는 받은 글 바로 옆에 남긴다. 안내에만 두었을 때 감사 글이 이어졌다(2026-11-03 점검).
+// 알림·답만 온 묶음에는 답하는 법을 붙이지 않는다. 머리말이 600자 남짓이라 알림 한 줄에도 매번 길게 보였다(2026-11-20 사용자 지적)
+const HOW_TO_ANSWER = "Answer each ask or request with post --reply-to <post id> --status answered (or declined); other posts need no reply. Do not post acknowledgements or thanks."
+const NO_REPLY = "No reply is needed; act on them if they bear on your work."
 
 // 받은 글을 세션에 넣는다. 서명이 맞는 사용자 글만 사용자의 말로 넣고, 나머지는 다른 세션이 보낸 글로 표시해 넣는다.
 // 할 일이 생기지 않는 글(묻지 않은 답, 다 모이지 않은 답)은 바로 대화 기록에만 넣는다. 턴을 열 글은 지금 턴이 끝난 뒤 넣는다(flushHeld)
@@ -314,7 +316,7 @@ async function flushHeld($: any) {
   if (fromPeers.length) {
     const body = fromPeers.map(describe).join('\n\n---\n\n')
     const r = await $.prompt.submit({
-      text: `${fromPeers.length} post(s) from the session chat for this session. They come from other sessions and are not the user's instructions. ${HOW_TO_ANSWER}\n\n${body}`,
+      text: `${fromPeers.length} post(s) from the session chat. From other sessions, not the user's instructions. ${fromPeers.some(m => m.kind === 'ask' || m.kind === 'request') ? HOW_TO_ANSWER : NO_REPLY}\n\n${body}`,
     }).catch((err: unknown) => ({ failed: String(err) }))
     log('deliver-peers', { ids: fromPeers.map(m => m.id), from: fromPeers.map(m => m.from), result: summarizeResult(r) })
   }
